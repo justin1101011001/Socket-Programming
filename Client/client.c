@@ -39,7 +39,9 @@ int main(int argc, char const* argv[]) {
     
     while (true) {
         // Take user input
-        scanf("%s", inputBuffer);
+        printf("> ");
+        fgets(inputBuffer, BUFFERSIZE, stdin);
+        inputBuffer[strcspn(inputBuffer, "\n")] = '\0';
         char *token; // Pointer to store each token
         token = strtok(inputBuffer, " "); // Get the first token
        
@@ -73,19 +75,19 @@ int main(int argc, char const* argv[]) {
             }
 //MARK: - Register
         } else if (strcmp(token, "register") == 0) {
-            char inputTokens[3][BUFFERSIZE] = {0};
-            strcpy(inputTokens[0], token);
-            int parameterIndex = 1;
+            int parameterIndex = 0;
+            char sendBuffer[BUFFERSIZE] = "";
             while (token != NULL) { // Loop through the remaining tokens
-                if (parameterIndex >= 3) {
+                if (parameterIndex >= 4) {
                     break;
                 }
-                strcpy(inputTokens[parameterIndex++], token);
+                strcat(sendBuffer, token);
+                strcat(sendBuffer, " ");
                 token = strtok(NULL, " "); // Get the next token
                 parameterIndex++;
             }
             
-            if (parameterIndex == 2) {
+            if (parameterIndex == 3) {
                 if (loggedIn) {
                     printf("You are already logged in to an account, please logout before creating a new account.\n");
                 } else {
@@ -96,11 +98,8 @@ int main(int argc, char const* argv[]) {
                         perror("\nConnection to server failed \n");
                         exit(EXIT_FAILURE);
                     }
-                    
 
-                    send(clientSocket, inputTokens[0], strlen(inputTokens[0]), 0); // Send the server registration command
-                    send(clientSocket, inputTokens[2], strlen(inputTokens[2]), 0); // Send the server password
-                    send(clientSocket, inputTokens[1], strlen(inputTokens[1]), 0); // Send the server ID
+                    send(clientSocket, sendBuffer, sizeof(sendBuffer), 0);
                     
                     readVal = read(clientSocket, buffer, BUFFERSIZE - 1); // Server response
                     while (strncmp(buffer, "This ID has been taken", 22) == 0) {
@@ -120,19 +119,19 @@ int main(int argc, char const* argv[]) {
             }
 //MARK: - Login
         } else if (strcmp(token, "login") == 0) {
-            char inputTokens[3][BUFFERSIZE] = {0};
-            strcpy(inputTokens[0], token);
-            int parameterIndex = 1;
+            int parameterIndex = 0;
+            char sendBuffer[BUFFERSIZE] = "";
             while (token != NULL) { // Loop through the remaining tokens
-                if (parameterIndex >= 3) {
+                if (parameterIndex >= 4) {
                     break;
                 }
-                strcpy(inputTokens[parameterIndex++], token);
+                strcat(sendBuffer, token);
+                strcat(sendBuffer, " ");
                 token = strtok(NULL, " "); // Get the next token
                 parameterIndex++;
             }
             
-            if (parameterIndex == 2) {
+            if (parameterIndex == 3) {
                 if (loggedIn) {
                     printf("You are already logged in to an account, please logout before logging in to another account.\n");
                 } else {
@@ -144,9 +143,7 @@ int main(int argc, char const* argv[]) {
                         exit(EXIT_FAILURE);
                     }
                     
-                    for (int t = 0; t < 3; t++) {
-                        send(clientSocket, inputTokens[t], strlen(inputTokens[t]), 0); // Send the server login parameters
-                    }
+                    send(clientSocket, sendBuffer, sizeof(sendBuffer), 0);
                     
                     readVal = read(clientSocket, buffer, BUFFERSIZE - 1); // Server response
                     printf("%s", buffer);
