@@ -9,12 +9,12 @@
 #define SERVERPORT 12000
 #define BUFFERSIZE 1024
 
-typedef struct user {
-    char ID[BUFFERSIZE] = {0};
-    char password[BUFFERSIZE] = {0};
+typedef struct userClient {
+    char ID[BUFFERSIZE];
+    char password[BUFFERSIZE];
     struct sockaddr_in address;
-    struct user *next = NULL;
-    struct user *prev = NULL;
+    struct userClient *next;
+    struct userClient *prev;
 } User;
 
 int main(int argc, char const* argv[]) {
@@ -38,7 +38,7 @@ int main(int argc, char const* argv[]) {
     address.sin_family = AF_INET; // address family is IPv4
     address.sin_addr.s_addr = INADDR_ANY; // socket will be bound to all local interfaces
     address.sin_port = htons(SERVERPORT); // set port number
-    if (bind(serverSocket, (struct sockaddr*)&address, sizeof(address)) < 0) {
+    if (bind(serverSocket, (struct sockaddr*)&address, addrlen) < 0) {
         perror("\nBinding socket to port failed\n");
         exit(EXIT_FAILURE);
     }
@@ -63,13 +63,13 @@ int main(int argc, char const* argv[]) {
         // Read from socket and store in buffer
         char buffer[BUFFERSIZE] = {0};
         char currentUserID[BUFFERSIZE] = {0};
-        int readVal;
+        ssize_t readVal;
         
         while (true) { // keep reading and processing messages from the current client
             readVal = read(perClientSocket, buffer, BUFFERSIZE - 1);
             
 //MARK: - Logout
-            if (strcomp(buffer, "logout") == 0) { // client wants to disconnect
+            if (strcmp(buffer, "logout") == 0) { // client wants to disconnect
                 // update currently looged in users
                 User *u = loggedInUsers;
                 while (u != NULL) {
@@ -89,7 +89,7 @@ int main(int argc, char const* argv[]) {
                 close(perClientSocket);
                 break;
 //MARK: - Register
-            } else if (strcomp(buffer, "register") == 0) { // registration
+            } else if (strcmp(buffer, "register") == 0) { // registration
                     char ID[BUFFERSIZE] = {0};
                     char password[BUFFERSIZE] = {0};
                     
@@ -136,7 +136,7 @@ int main(int argc, char const* argv[]) {
                     }
                 }
 //MARK: - Login
-            } else if (strcomp(buffer, "login") == 0) {
+            } else if (strcmp(buffer, "login") == 0) {
                 char ID[BUFFERSIZE] = {0};
                 char password[BUFFERSIZE] = {0};
                 readVal = read(perClientSocket, ID, BUFFERSIZE - 1);
@@ -180,7 +180,7 @@ int main(int argc, char const* argv[]) {
                 char completionMessage[] = "Successfully logged in.\n\nAvailable Services\n====================\nLogout: logout\nList Online Users: list\n";
                 send(perClientSocket, completionMessage, strlen(completionMessage), 0);
 //MARK: - List
-            } else if (strcomp(buffer, "list") == 0) {
+            } else if (strcmp(buffer, "list") == 0) {
                 User *u = loggedInUsers;
                 while (u != NULL) {
                     send(perClientSocket, u -> ID, strlen(u -> ID), 0);

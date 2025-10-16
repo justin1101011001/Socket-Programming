@@ -5,6 +5,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include <stdbool.h>
+#include <arpa/inet.h>
 
 #define SERVERPORT 12000
 #define BUFFERSIZE 1024
@@ -21,8 +22,8 @@ int main(int argc, char const* argv[]) {
         exit(EXIT_FAILURE);
     }
     
-    address.sin_family = AF_INET; // address family is IPv4
-    address.sin_port = htons(SERVERPORT); // set port number
+    serverAddress.sin_family = AF_INET; // address family is IPv4
+    serverAddress.sin_port = htons(SERVERPORT); // set port number
     
     // Convert IPv4 and IPv6 addresses from text to binary form
     if (inet_pton(AF_INET, "127.0.0.1", &serverAddress.sin_addr) <= 0) {
@@ -33,7 +34,7 @@ int main(int argc, char const* argv[]) {
     // Continue reading and sending messages
     char buffer[BUFFERSIZE] = {0};
     char inputBuffer[BUFFERSIZE] = {0};
-    int readVal;
+    ssize_t readVal;
     bool loggedIn = false;
     
     while (true) {
@@ -79,7 +80,7 @@ int main(int argc, char const* argv[]) {
                 if (parameterIndex >= 3) {
                     break;
                 }
-                strcpy(inputTokens[i], token);
+                strcpy(inputTokens[parameterIndex++], token);
                 token = strtok(NULL, " "); // Get the next token
                 parameterIndex++;
             }
@@ -91,7 +92,7 @@ int main(int argc, char const* argv[]) {
                     
                     // Connect to server
                     int status;
-                    if ((status = connect(clientSocket, (struct sockaddr*)&serverAddress, sizeof(serverAddress))) < 0) {
+                    if ((status = connect(clientSocket, (struct sockaddr*)&serverAddress, addrlen)) < 0) {
                         perror("\nConnection to server failed \n");
                         exit(EXIT_FAILURE);
                     }
@@ -126,7 +127,7 @@ int main(int argc, char const* argv[]) {
                 if (parameterIndex >= 3) {
                     break;
                 }
-                strcpy(inputTokens[i], token);
+                strcpy(inputTokens[parameterIndex++], token);
                 token = strtok(NULL, " "); // Get the next token
                 parameterIndex++;
             }
@@ -138,7 +139,7 @@ int main(int argc, char const* argv[]) {
                     
                     // Connect to server
                     int status;
-                    if ((status = connect(clientSocket, (struct sockaddr*)&serverAddress, sizeof(serverAddress))) < 0) {
+                    if ((status = connect(clientSocket, (struct sockaddr*)&serverAddress, addrlen)) < 0) {
                         perror("\nConnection to server failed \n");
                         exit(EXIT_FAILURE);
                     }
