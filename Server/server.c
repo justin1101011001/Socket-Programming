@@ -67,10 +67,6 @@ int main(int argc, char const* argv[]) {
             exit(EXIT_FAILURE);
         }
         fprintf(stderr, "Accepted client connection\n");
-        
-        struct pollfd pollfd;
-        pollfd.fd = perClientSocket;     // your client socket fd
-        pollfd.events = POLLIN;          // interested in read readiness
 
         // Read from socket and store in buffer
         char buffer[BUFFERSIZE] = {0};
@@ -78,16 +74,9 @@ int main(int argc, char const* argv[]) {
         User *currentUser = NULL;
         
         while (true) { // keep reading and processing messages from the current client
-//            int pollResult = poll(&pollfd, 1, -1);  // 1 fd, wait forever
-//            if (pollResult <= 0) {
-//                continue;
-//            }
             
             memset(buffer, 0, sizeof(buffer)); // clear buffer
             readVal = read(perClientSocket, buffer, BUFFERSIZE);
-//            if (readVal <= 0) {
-//                continue;
-//            }
             fprintf(stderr, "Client: %s\n", buffer);
             
             char *token; // Pointer to store each token
@@ -95,7 +84,7 @@ int main(int argc, char const* argv[]) {
 //MARK: - Logout
             if (strcmp(token, "logout") == 0) { // client wants to disconnect
                 fprintf(stderr, "Start logout process\n");
-                // update currently looged in users
+                // update currently logged in users
                 if (loggedInUsers == currentUser) {
                     loggedInUsers = currentUser -> next;
                 }
@@ -124,8 +113,8 @@ int main(int argc, char const* argv[]) {
                     parameterIndex++;
                 } // tokenize input
                 
-                fprintf(stderr, "Check if user exists\n");
                 // check if user ID is already taken
+                fprintf(stderr, "Check if user exists\n");
                 bool userExists = false;
                 User *u = registeredUsers;
                 while (u != NULL) {
@@ -176,8 +165,8 @@ int main(int argc, char const* argv[]) {
                     parameterIndex++;
                 } // tokenize input
                 
-                fprintf(stderr, "Check if user is registered\n");
                 // check if user is already registered
+                fprintf(stderr, "Check if user is registered\n");
                 bool userRegistered = false;
                 User *u = registeredUsers;
                 while (u != NULL) {
@@ -200,8 +189,8 @@ int main(int argc, char const* argv[]) {
                     break;
                 }
                 
-                fprintf(stderr, "Check password\n");
                 // user registered, check password
+                fprintf(stderr, "Check password\n");
                 if (strcmp(u -> password, inputTokens[2]) != 0) {
                     char errorMessage[] = "Incorrect password, please try again.\n";
                     send(perClientSocket, errorMessage, strlen(errorMessage), 0);
@@ -212,8 +201,8 @@ int main(int argc, char const* argv[]) {
                     break;
                 }
                 
-                fprintf(stderr, "Insert new login\n");
                 // password correct, insert to logged in list
+                fprintf(stderr, "Insert new login\n");
                 User *newLogin = (User *)calloc(1, sizeof(User));
                 newLogin -> next = NULL;
                 newLogin -> prev = NULL;
@@ -232,7 +221,7 @@ int main(int argc, char const* argv[]) {
                 
                 char completionMessage[] = "Successfully logged in.\nAvailable Services\n====================\nLogout: logout\nList Online Users: list\n";
                 send(perClientSocket, completionMessage, strlen(completionMessage), 0);
-                //MARK: - List
+//MARK: - List
             } else if (strcmp(token, "list") == 0) {
                 User *u = loggedInUsers;
                 while (u != NULL) {
