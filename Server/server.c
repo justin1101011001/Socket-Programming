@@ -55,6 +55,7 @@ int main(int argc, char const* argv[]) {
     User *loggedInUsers = NULL;
     
     while (true) { // keep listening for new connections
+        fprintf(stderr, "Listening for connections\n");
         if (listen(serverSocket, maxWaitingToConnect) < 0) {
             perror("\nListening for connection failed\n");
             exit(EXIT_FAILURE);
@@ -73,135 +74,151 @@ int main(int argc, char const* argv[]) {
 
         // Read from socket and store in buffer
         char buffer[BUFFERSIZE] = {0};
-        char currentUserID[BUFFERSIZE] = {0};
         ssize_t readVal;
+        User *currentUser = NULL;
         
         while (true) { // keep reading and processing messages from the current client
-            int pollResult = poll(&pollfd, 1, -1);  // 1 fd, wait forever
-            if (pollResult <= 0) {
-                continue;
-            }
+//            int pollResult = poll(&pollfd, 1, -1);  // 1 fd, wait forever
+//            if (pollResult <= 0) {
+//                continue;
+//            }
             
-            readVal = read(perClientSocket, buffer, BUFFERSIZE - 1);
-            if (readVal <= 1) {
-                continue;
-            }
-            fprintf(stderr, "Buffer: %s\n", buffer);
+            memset(buffer, 0, sizeof(buffer)); // clear buffer
+            readVal = read(perClientSocket, buffer, BUFFERSIZE);
+//            if (readVal <= 0) {
+//                continue;
+//            }
+            fprintf(stderr, "Client: %s\n", buffer);
             
             char *token; // Pointer to store each token
             token = strtok(buffer, " "); // Get the first token
-            
-            //MARK: - Logout
+//MARK: - Logout
             if (strcmp(token, "logout") == 0) { // client wants to disconnect
+                fprintf(stderr, "Start logout process\n");
                 // update currently looged in users
-                User *u = loggedInUsers;
-                while (u != NULL) {
-                    if (strcmp(u -> ID, currentUserID) == 0) {
-                        u -> prev -> next = u -> next;
-                        if (u -> next != NULL) {
-                            u -> next -> prev = u -> prev;
-                        }
-                        free(u);
-                        break;
-                    }
+                if (loggedInUsers == currentUser) {
+                    loggedInUsers = currentUser -> next;
                 }
+                if (currentUser -> prev != NULL) {
+                    currentUser -> prev -> next = currentUser -> next;
+                }
+                if (currentUser -> next != NULL) {
+                    currentUser -> next -> prev = currentUser -> prev;
+                }
+                free(currentUser);
+                
                 char sendBuffer[] = "Successfully logged out.\n";
                 send(perClientSocket, sendBuffer, strlen(sendBuffer), 0);
                 
-                // Close the connected socket
+                // Close connection
                 close(perClientSocket);
                 break;
-                //MARK: - Register
+//MARK: - Register
             } else if (strcmp(token, "register") == 0) { // registration
+                fprintf(stderr, "Start register process\n");
                 char inputTokens[3][BUFFERSIZE] = {0}; // 1 = ID, 2 = password
                 int parameterIndex = 0;
-                while (token != NULL) { // Loop through the remaining tokens
+                while (token != NULL) {
                     strcpy(inputTokens[parameterIndex], token);
-                    token = strtok(NULL, " "); // Get the next token
+                    token = strtok(NULL, " ");
                     parameterIndex++;
+                } // tokenize input
+                
+                fprintf(stderr, "Check if user exists\n");
+                // check if user ID is already taken
+                bool userExists = false;
+                User *u = registeredUsers;
+                while (u != NULL) {
+                    if (strcmp(u -> ID, inputTokens[1]) == 0) {
+                        userExists = true;
+                        break;
+                    }
+                    u = u -> next;
                 }
                 
-                while (true) { // retry until ID is unique or registration cancelled
-                    
-                    if (strcmp(inputTokens[1], "CANCEL") == 0) { // user cancels registration
-                        strcpy(inputTokens[2], "");
-                        char completionMessage[] = "Registration cancelled.\n";
-                        send(perClientSocket, completionMessage, strlen(completionMessage), 0);
-                        break;
-                    }
-                    
-                    // check if user ID is already taken
-                    bool userExists = false;
-                    User *u = registeredUsers;
-                    while (u != NULL) {
-                        if (strcmp(u -> ID, inputTokens[1]) == 0) {
-                            userExists = true;
-                            break;
-                        }
-                    }
-                    if (!userExists) { // if not, insert new user to linked list
-                        User *newUser = (User *)calloc(1, sizeof(User));
-                        strcpy(newUser -> ID, inputTokens[1]);
-                        strcpy(newUser -> password, inputTokens[2]);
-                        if (registeredUsers == NULL) {
-                            registeredUsers = newUser;
-                        } else {
-                            registeredUsers -> prev = newUser;
-                            newUser -> next = registeredUsers;
-                            registeredUsers = newUser;
-                        }
-                        
-                        char completionMessage[] = "Registration complete, please login to start using the service.\n";
-                        send(perClientSocket, completionMessage, strlen(completionMessage), 0);
-                        break;
-                        
+                if (!userExists) { // if not, insert new user to linked list
+                    fprintf(stderr, "Insert new user\n");
+                    User *newUser = (User *)calloc(1, sizeof(User));
+                    newUser -> next = NULL;
+                    newUser -> prev = NULL;
+                    strcpy(newUser -> ID, inputTokens[1]);
+                    strcpy(newUser -> password, inputTokens[2]);
+                    if (registeredUsers == NULL) {
+                        registeredUsers = newUser;
                     } else {
-                        char errorMessage[] = "This ID has been taken, please choose another one or type \"CANCEL\" to cancel the registration process.\n";
-                        send(perClientSocket, errorMessage, strlen(errorMessage), 0);
+                        registeredUsers -> prev = newUser;
+                        newUser -> next = registeredUsers;
+                        registeredUsers = newUser;
                     }
                     
-                    readVal = read(perClientSocket, buffer, BUFFERSIZE - 1);
-                    token = strtok(buffer, " ");
-                    parameterIndex = 0;
-                    while (token != NULL) { // Loop through the remaining tokens
-                        strcpy(inputTokens[parameterIndex], token);
-                        token = strtok(NULL, " "); // Get the next token
-                        parameterIndex++;
-                    }
+                    char completionMessage[] = "Registration complete, please login to start using the service.\n";
+                    send(perClientSocket, completionMessage, strlen(completionMessage), 0);
+                    
+                } else {
+                    fprintf(stderr, "User already exists\n");
+                    char errorMessage[] = "This ID has been taken, please choose another one.\n";
+                    send(perClientSocket, errorMessage, strlen(errorMessage), 0);
                 }
-                //MARK: - Login
-            } else if (strcmp(token, "login") == 0) {
-                char ID[BUFFERSIZE] = {0};
-                char password[BUFFERSIZE] = {0};
-                readVal = read(perClientSocket, ID, BUFFERSIZE - 1);
-                readVal = read(perClientSocket, password, BUFFERSIZE - 1);
                 
+                // Close connection
+                close(perClientSocket);
+                fprintf(stderr, "Connection closed\n");
+                break;
+                
+//MARK: - Login
+            } else if (strcmp(token, "login") == 0) {
+                fprintf(stderr, "Start login process\n");
+                char inputTokens[3][BUFFERSIZE] = {0}; // 1 = ID, 2 = password
+                int parameterIndex = 0;
+                while (token != NULL) {
+                    strcpy(inputTokens[parameterIndex], token);
+                    token = strtok(NULL, " ");
+                    parameterIndex++;
+                } // tokenize input
+                
+                fprintf(stderr, "Check if user is registered\n");
                 // check if user is already registered
                 bool userRegistered = false;
                 User *u = registeredUsers;
                 while (u != NULL) {
-                    if (strcmp(u -> ID, ID) == 0) {
+                    if (strcmp(u -> ID, inputTokens[1]) == 0) {
                         userRegistered = true;
                         break;
                     }
+                    u = u -> next;
                 }
                 
                 // user not registered
                 if (!userRegistered) {
+                    fprintf(stderr, "User not registered\n");
                     char errorMessage[] = "No know user with this ID, please register first.\n";
                     send(perClientSocket, errorMessage, strlen(errorMessage), 0);
-                    continue;
+                    
+                    // Close the connected socket
+                    close(perClientSocket);
+                    fprintf(stderr, "Connection closed\n");
+                    break;
                 }
+                
+                fprintf(stderr, "Check password\n");
                 // user registered, check password
-                if (strcmp(u -> password, password) != 0) {
+                if (strcmp(u -> password, inputTokens[2]) != 0) {
                     char errorMessage[] = "Incorrect password, please try again.\n";
                     send(perClientSocket, errorMessage, strlen(errorMessage), 0);
-                    continue;
+                    
+                    // Close connection
+                    close(perClientSocket);
+                    fprintf(stderr, "Connection closed\n");
+                    break;
                 }
+                
+                fprintf(stderr, "Insert new login\n");
                 // password correct, insert to logged in list
                 User *newLogin = (User *)calloc(1, sizeof(User));
-                strcpy(newLogin -> ID, ID);
+                newLogin -> next = NULL;
+                newLogin -> prev = NULL;
                 newLogin -> address = address;
+                strcpy(newLogin -> ID, inputTokens[1]);
                 
                 if (loggedInUsers == NULL) { // insert to list
                     loggedInUsers = newLogin;
@@ -211,19 +228,20 @@ int main(int argc, char const* argv[]) {
                     loggedInUsers = newLogin;
                 }
                 
-                char completionMessage[] = "Successfully logged in.\n\nAvailable Services\n====================\nLogout: logout\nList Online Users: list\n";
+                currentUser = newLogin;
+                
+                char completionMessage[] = "Successfully logged in.\nAvailable Services\n====================\nLogout: logout\nList Online Users: list\n";
                 send(perClientSocket, completionMessage, strlen(completionMessage), 0);
                 //MARK: - List
             } else if (strcmp(token, "list") == 0) {
                 User *u = loggedInUsers;
                 while (u != NULL) {
-                    send(perClientSocket, u -> ID, strlen(u -> ID), 0);
+                    send(perClientSocket, u -> ID, BUFFERSIZE, 0);
+                    u = u -> next;
                 }
                 char completionMessage[] = "END OF USER LIST";
-                send(perClientSocket, completionMessage, strlen(completionMessage), 0);
+                send(perClientSocket, completionMessage, BUFFERSIZE, 0);
             }
-            
-            strcpy(buffer, "");
         }
     }
     
