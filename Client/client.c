@@ -1,12 +1,12 @@
 #include <netinet/in.h>
-#include <stdio.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
 #include <unistd.h>
-#include <stdbool.h>
-#include <arpa/inet.h>
 #include <assert.h>
+#include <stdio.h>
 
 #define SERVERPORT 12014
 #define BUFFERSIZE 1024
@@ -73,7 +73,10 @@ int setListeningSocket(int listeningSocket, int listeningPort) {
 
 int main(int argc, char const* argv[]) {
 //MARK: - Socket Setup
-    assert(argc == 2 && "Usage: ./client.out <Listening port number>");
+    if (argc != 2) {
+        printf("\n\033[31mUsage: ./client.out <Listening port number>\033[0m\n");
+        exit(-1);
+    }
     
     int listeningSocket = 0, clientSocket = 0;
     int listeningPort = atoi(argv[1]); // socket fd
