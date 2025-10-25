@@ -256,7 +256,7 @@ static void handle_client(int perClientSocket) {
             fprintf(stderr, "\033[35m[LOG]\033[0m  | User is registered\n");
             fprintf(stderr, "\033[35m[LOG]\033[0m  | Checking password\n");
             if (strcmp(u -> password, inputTokens[2]) != 0) {
-                fprintf(stderr, "\033[35m[LOG]\033[0m |  Incorrect password\n");
+                fprintf(stderr, "\033[35m[LOG]\033[0m  | Incorrect password\n");
                 char errorMessage[] = "Incorrect password, please try again.\n";
                 send(perClientSocket, errorMessage, strlen(errorMessage), 0);
 
