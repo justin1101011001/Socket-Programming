@@ -6,9 +6,9 @@
 #include <unistd.h>
 #include <stdbool.h>
 #include <arpa/inet.h>
+#include <assert.h>
 
 #define SERVERPORT 12014
-#define LISTENINGPORT 12020
 #define BUFFERSIZE 1024
 
 int connectToServer(int clientSocket) {
@@ -18,7 +18,7 @@ int connectToServer(int clientSocket) {
     
     // Create socket file descriptor
     if ((clientSocket = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-        perror("\nSocket creation failed\n");
+        perror("\n\033[31mSocket creation failed\033[0m\n");
         exit(EXIT_FAILURE);
     }
     
@@ -27,44 +27,44 @@ int connectToServer(int clientSocket) {
     
     // Convert IPv4 and IPv6 addresses from text to binary form
     if (inet_pton(AF_INET, "127.0.0.1", &serverAddress.sin_addr) <= 0) {
-        perror("\nInvalid address/ Address not supported \n");
+        perror("\n\033[31mInvalid address/ Address not supported\033[0m\n");
         exit(EXIT_FAILURE);
     }
     
     // Connect to server
     int status;
     if ((status = connect(clientSocket, (struct sockaddr*)&serverAddress, addrlen)) < 0) {
-        perror("\nConnection to server failed \n");
+        perror("\n\033[31mConnection to server failed\033[0m\n");
         exit(EXIT_FAILURE);
     }
     
     return clientSocket;
 }
 
-int setListeningSocket(int listeningSocket) {
+int setListeningSocket(int listeningSocket, int listeningPort) {
     struct sockaddr_in address; // IP and port number to bind the socket to
     socklen_t addrlen = sizeof(address); // length of address
     
     // Create socket file descriptor, use IPv4 and TCP
     if ((listeningSocket = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-        perror("\nSocket creation failed\n");
+        perror("\n\033[31mSocket creation failed\033[0m\n");
         exit(EXIT_FAILURE);
     }
     // Attach serverSocket to the port 12000
     int opt = 1;
     if (setsockopt(listeningSocket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
-        perror("\nSet socket options failed\n");
+        perror("\n\033[31mSet socket options failed\033[0m\n");
         exit(EXIT_FAILURE);
     }
     if (setsockopt(listeningSocket, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt))) {
-        perror("\nSet socket options failed\n");
+        perror("\n\033[31mSet socket options failed\033[0m\n");
         exit(EXIT_FAILURE);
     }
     address.sin_family = AF_INET; // address family is IPv4
     address.sin_addr.s_addr = INADDR_ANY; // socket will be bound to all local interfaces
-    address.sin_port = htons(LISTENINGPORT); // set port number
+    address.sin_port = htons(listeningPort); // set port number
     if (bind(listeningSocket, (struct sockaddr*)&address, addrlen) < 0) {
-        perror("\nBinding socket to port failed\n");
+        perror("\n\033[31mBinding socket to port failed\033[0m\n");
         exit(EXIT_FAILURE);
     }
     
@@ -73,9 +73,16 @@ int setListeningSocket(int listeningSocket) {
 
 int main(int argc, char const* argv[]) {
 //MARK: - Socket Setup
-    int listeningSocket = 0, clientSocket = 0; // socket fd
+    assert(argc == 2 && "Usage: ./client.out <Listening port number>");
     
-    listeningSocket = setListeningSocket(listeningSocket);
+    int listeningSocket = 0, clientSocket = 0;
+    int listeningPort = atoi(argv[1]); // socket fd
+    if (listeningPort < 49152 || listeningPort > 65535) {
+        printf("\n\033[31mInvalid port number, please choose in the range of [49152, 65535]\033[0m\n");
+        exit(-1);
+    }
+    
+    listeningSocket = setListeningSocket(listeningSocket, listeningPort);
     
     char buffer[BUFFERSIZE] = {0}; // buffer for messages from server
     char inputBuffer[BUFFERSIZE] = {0}; // buffer for user input
@@ -139,7 +146,7 @@ int main(int argc, char const* argv[]) {
                     printf("%s", buffer);
                 }
             } else {
-                printf("Invalid parameters.\nUsage: register [ID] [password]\n");
+                printf("Invalid parameters.\nUsage: register <ID> <password>\n");
             }
 //MARK: - Login
         } else if (strcmp(token, "login") == 0) {
@@ -164,16 +171,18 @@ int main(int argc, char const* argv[]) {
                     readVal = read(clientSocket, buffer, BUFFERSIZE); // Server response
                     
                     if (strncmp(buffer, "OK.", 3) == 0) { // if successfully logged in
-                        int32_t formatted = htonl(listeningSocket);
-                        send(clientSocket, &formatted, sizeof(formatted), 0);
+                        int32_t formatted = htons(listeningPort);
+                        send(clientSocket, &formatted, sizeof(int32_t), 0);
                         loggedIn = true;
+ 
+                        memset(buffer, 0, sizeof(buffer)); // clear buffer
                         readVal = read(clientSocket, buffer, BUFFERSIZE); // Server response
                     }
                     
                     printf("%s", buffer);
                 }
             } else {
-                printf("Invalid parameters.\nUsage: login [ID] [password]\n");
+                printf("Invalid parameters.\nUsage: login <ID> <password>\n");
             }
 //MARK: - List
         } else if (strcmp(token, "list") == 0) {

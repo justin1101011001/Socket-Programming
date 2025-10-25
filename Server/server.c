@@ -7,6 +7,7 @@
 #include <stdbool.h>
 #include <poll.h>
 #include <pthread.h>
+#include <arpa/inet.h>
 
 #define SERVERPORT 12014
 #define BUFFERSIZE 1024
@@ -41,6 +42,7 @@ User *loggedInUsers = NULL;
 // Global job queue
 JobQueue job_queue;
 
+//MARK: - Threading
 // Initialize job queue
 void queue_init(JobQueue *q) {
     q -> front = 0;
@@ -84,9 +86,13 @@ static void handle_client(int perClientSocket) {
     ssize_t readVal;
     User *currentUser = NULL;
 
+    // Get client address info
     struct sockaddr_in client_address;
     socklen_t client_addrlen = sizeof(client_address);
     getpeername(perClientSocket, (struct sockaddr*)&client_address, &client_addrlen);
+    char ip_str[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &(client_address.sin_addr), ip_str, INET_ADDRSTRLEN); // IP
+    int port = ntohs(client_address.sin_port); // Port
 
     while (true) { // keep reading and processing messages from the current client
         memset(buffer, 0, sizeof(buffer)); // clear buffer
@@ -113,7 +119,7 @@ static void handle_client(int perClientSocket) {
             break;
         }
 
-        fprintf(stderr, "\033[36m[MESSAGE]\033[0m Client: %s\n", buffer);
+        fprintf(stderr, "\033[36m[MESSAGE]\033[0m Client %s:%d: %s\n", ip_str, port, buffer);
 
         char *token; // Pointer to store each token
         token = strtok(buffer, " ");
@@ -147,7 +153,7 @@ static void handle_client(int perClientSocket) {
 
             // Close connection
             close(perClientSocket);
-            fprintf(stderr, "\033[35m[LOG]\033[0m Connection to client closed\n");
+            fprintf(stderr, "\033[35m[LOG]\033[0m Connection to client %s:%d closed\n", ip_str, port);
             break;
 //MARK: - Register
         } else if (strcmp(token, "register") == 0) { // registration
@@ -202,7 +208,7 @@ static void handle_client(int perClientSocket) {
 
             // Close connection
             close(perClientSocket);
-            fprintf(stderr, "\033[35m[LOG]\033[0m Connection to client closed\n");
+            fprintf(stderr, "\033[35m[LOG]\033[0m Connection to client %s:%d closed\n", ip_str, port);
             break;
 //MARK: - Login
         } else if (strcmp(token, "login") == 0) {
@@ -239,7 +245,7 @@ static void handle_client(int perClientSocket) {
 
                 // Close the connected socket
                 close(perClientSocket);
-                fprintf(stderr, "\033[35m[LOG]\033[0m Connection to client closed\n");
+                fprintf(stderr, "\033[35m[LOG]\033[0m Connection to client %s:%d closed\n", ip_str, port);
                 break;
             }
 
@@ -253,24 +259,29 @@ static void handle_client(int perClientSocket) {
 
                 // Close connection
                 close(perClientSocket);
-                fprintf(stderr, "\033[35m[LOG]\033[0m Connection to client closed\n");
+                fprintf(stderr, "\033[35m[LOG]\033[0m Connection to client %s:%d closed\n", ip_str, port);
                 break;
             }
 
+            
+            fprintf(stderr, "\033[35m[LOG]\033[0m Password accepted\n");
+            
+            // Record client listening port
+            fprintf(stderr, "\033[35m[LOG]\033[0m Request client listening port number\n");
             char response[] = "OK.";
             send(perClientSocket, response, BUFFERSIZE, 0);
             int32_t clientListenPort;
             readVal = read(perClientSocket, &clientListenPort, BUFFERSIZE);
-            struct sockaddr_in clientListenSocket = client_address;
-            clientListenSocket.sin_port = clientListenPort;
+            fprintf(stderr, "\033[35m[LOG]\033[0m Recieved client listening port number\n");
+            struct sockaddr_in clientListenAddress = client_address;
+            clientListenAddress.sin_port = clientListenPort;
             
             // password correct, insert to logged in list
-            fprintf(stderr, "\033[35m[LOG]\033[0m Password accepted\n");
             fprintf(stderr, "\033[35m[LOG]\033[0m Insert user to logged-in list\n");
             User *newLogin = (User *)calloc(1, sizeof(User));
             newLogin -> next = NULL;
             newLogin -> prev = NULL;
-            newLogin -> address = clientListenSocket;
+            newLogin -> address = clientListenAddress;
             strcpy(newLogin -> ID, inputTokens[1]);
 
             pthread_mutex_lock(&loggedInUsers_mutex);
@@ -282,11 +293,12 @@ static void handle_client(int perClientSocket) {
                 loggedInUsers = newLogin;
             }
             pthread_mutex_unlock(&loggedInUsers_mutex);
-
+            
             currentUser = newLogin;
 
-            char completionMessage[] = "Successfully logged in.\nAvailable Services\n====================\nLogout: logout\nList Online Users: list\n";
-            send(perClientSocket, completionMessage, strlen(completionMessage), 0);
+            char completionMessage[] = "Successfully logged in.\n";
+            send(perClientSocket, completionMessage, BUFFERSIZE, 0);
+            fprintf(stderr, "\033[35m[LOG]\033[0m Finished login process\n");
 //MARK: - List
         } else if (strcmp(token, "list") == 0) {
             pthread_mutex_lock(&loggedInUsers_mutex);
@@ -378,7 +390,11 @@ int main(int argc, char const* argv[]) {
             perror("\n\033[31mAccepting connection failed\033[0m\n");
             exit(EXIT_FAILURE);
         }
-        fprintf(stderr, "\033[35m[LOG]\033[0m Accepted client connection\n");
+        
+        char ip_str[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &(address.sin_addr), ip_str, INET_ADDRSTRLEN);
+        int port = ntohs(address.sin_port);  // Convert back to host byte order
+        fprintf(stderr, "\033[35m[LOG]\033[0m Accepted client connection from %s:%d\n", ip_str, port);
 
         // Add accepted client socket to the job queue for worker threads
         queue_push(&job_queue, perClientSocket);
