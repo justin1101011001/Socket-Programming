@@ -13,6 +13,7 @@
 #define THREAD_POOL_SIZE 10
 #define JOB_QUEUE_SIZE 16
 
+// User structure
 typedef struct userClient {
     char ID[BUFFERSIZE];
     char password[BUFFERSIZE];
@@ -275,7 +276,7 @@ static void handle_client(int perClientSocket) {
             send(perClientSocket, response, BUFFERSIZE, 0);
             int32_t clientListenPort;
             readVal = read(perClientSocket, &clientListenPort, BUFFERSIZE);
-            fprintf(stderr, "\033[35m[LOG]\033[0m  | Recieved client listening port number\n");
+            fprintf(stderr, "\033[35m[LOG]\033[0m  | Recieved client listening port number: %d\n", ntohs(clientListenPort));
             struct sockaddr_in clientListenAddress = client_address;
             clientListenAddress.sin_port = clientListenPort;
             
