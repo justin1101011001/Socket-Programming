@@ -8,28 +8,12 @@
 #include <unistd.h>
 #include <stdio.h>
 
+#include "server.h"
+
 #define SERVERPORT 12014
 #define BUFFERSIZE 1024
 #define THREAD_POOL_SIZE 10
 #define JOB_QUEUE_SIZE 16
-
-// User structure
-typedef struct userClient {
-    char ID[BUFFERSIZE];
-    char password[BUFFERSIZE];
-    struct sockaddr_in address;
-    struct userClient *next;
-    struct userClient *prev;
-} User;
-
-// Job queue for client socket descriptors
-typedef struct {
-    int sockets[JOB_QUEUE_SIZE];
-    int front, rear, count;
-    pthread_mutex_t mutex;
-    pthread_cond_t cond_nonempty;
-    pthread_cond_t cond_nonfull;
-} JobQueue;
 
 // Mutexes for user lists
 pthread_mutex_t registeredUsers_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -41,6 +25,79 @@ User *loggedInUsers = NULL;
 
 // Global job queue
 JobQueue job_queue;
+
+int main(int argc, char const* argv[]) {
+//MARK: - main
+    int serverSocket, perClientSocket; // socket used for listening and socket created for each client
+    struct sockaddr_in address; // IP and port number to bind the socket to
+    socklen_t addrlen = sizeof(address); // length of address
+
+    // Initialize job queue
+    queue_init(&job_queue);
+
+    // Create socket file descriptor, use IPv4 and TCP
+    if ((serverSocket = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        perror(RED("Socket creation failed\n"));
+        exit(EXIT_FAILURE);
+    }
+    fprintf(stderr, MAGENTA("[LOG]")" Socket created\n");
+
+    // Attach serverSocket to the port 12000
+    int opt = 1;
+    if (setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
+        perror(RED("Set socket options failed\n"));
+        exit(EXIT_FAILURE);
+    }
+    if (setsockopt(serverSocket, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt))) {
+        perror(RED("Set socket options failed\n"));
+        exit(EXIT_FAILURE);
+    }
+    address.sin_family = AF_INET; // address family is IPv4
+    address.sin_addr.s_addr = INADDR_ANY; // socket will be bound to all local interfaces
+    address.sin_port = htons(SERVERPORT); // set port number
+    if (bind(serverSocket, (struct sockaddr*)&address, addrlen) < 0) {
+        perror(RED("Binding socket to port failed\n"));
+        exit(EXIT_FAILURE);
+    }
+    fprintf(stderr, MAGENTA("[LOG]")" Socket attached to port\n");
+
+    // Listen for connections
+    int maxWaitingToConnect = 10;
+    if (listen(serverSocket, maxWaitingToConnect) < 0) {
+        perror(RED("Listening for connection failed\n"));
+        exit(EXIT_FAILURE);
+    }
+
+    // Create worker threads for handling clients
+    pthread_t threads[THREAD_POOL_SIZE];
+    for (int i = 0; i < THREAD_POOL_SIZE; i++) {
+        if (pthread_create(&threads[i], NULL, worker_thread, NULL) != 0) {
+            perror(RED("Failed to create worker thread\n"));
+            exit(EXIT_FAILURE);
+        }
+    }
+    fprintf(stderr, MAGENTA("[LOG]")" Thread pool initialized\n");
+
+    while (true) { // keep listening for new connections
+        fprintf(stderr, MAGENTA("[LOG]")" Listening for connections\n");
+
+        // Accept connections
+        if ((perClientSocket = accept(serverSocket, (struct sockaddr*)&address, &addrlen)) < 0) {
+            perror(RED("Accepting connection failed\n"));
+            exit(EXIT_FAILURE);
+        }
+        
+        char ip_str[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &(address.sin_addr), ip_str, INET_ADDRSTRLEN);
+        int port = ntohs(address.sin_port);  // Convert back to host byte order
+        fprintf(stderr, MAGENTA("[LOG]")" Accepted client connection from %s:%d\n", ip_str, port);
+
+        // Add accepted client socket to the job queue for worker threads
+        queue_push(&job_queue, perClientSocket);
+    }
+
+    return 0;
+}
 
 //MARK: - Threading
 // Initialize job queue
@@ -80,6 +137,17 @@ int queue_pop(JobQueue *q) {
     return sock;
 }
 
+// Worker thread function to process client connections
+void* worker_thread(void* arg) {
+    (void)arg;
+    while (1) {
+        int clientSock = queue_pop(&job_queue);
+        handle_client(clientSock);
+    }
+    return NULL;
+}
+
+// MARK: - Chat Functions
 // Handle client communication and commands
 static void handle_client(int perClientSocket) {
     char buffer[BUFFERSIZE] = {0};
@@ -119,7 +187,7 @@ static void handle_client(int perClientSocket) {
             break;
         }
 
-        fprintf(stderr, "\033[36m[MESSAGE]\033[0m Client %s:%d: %s\n", ip_str, port, buffer);
+        fprintf(stderr, CYAN("[MESSAGE]")" Client %s:%d: %s\n", ip_str, port, buffer);
 
         char *token; // Pointer to store each token
         token = strtok(buffer, " ");
@@ -130,7 +198,7 @@ static void handle_client(int perClientSocket) {
 
 //MARK: - Logout
         if (strcmp(token, "logout") == 0) { // client wants to disconnect
-            fprintf(stderr, "\033[35m[LOG]\033[0m Start logout process\n");
+            fprintf(stderr, MAGENTA("[LOG]")" Start logout process\n");
             if (currentUser != NULL) {
                 pthread_mutex_lock(&loggedInUsers_mutex);
                 if (loggedInUsers == currentUser) {
@@ -145,7 +213,7 @@ static void handle_client(int perClientSocket) {
                 pthread_mutex_unlock(&loggedInUsers_mutex);
                 free(currentUser);
                 currentUser = NULL;
-                fprintf(stderr, "\033[35m[LOG]\033[0m  | Removed user from logged-in list\n");
+                fprintf(stderr, MAGENTA("[LOG]")"  | Removed user from logged-in list\n");
             }
 
             char sendBuffer[] = "Successfully logged out.\n";
@@ -153,12 +221,12 @@ static void handle_client(int perClientSocket) {
 
             // Close connection
             close(perClientSocket);
-            fprintf(stderr, "\033[35m[LOG]\033[0m  | Connection to client %s:%d closed\n", ip_str, port);
-            fprintf(stderr, "\033[35m[LOG]\033[0m Logout process complete\n");
+            fprintf(stderr, MAGENTA("[LOG]")"  | Connection to client %s:%d closed\n", ip_str, port);
+            fprintf(stderr, MAGENTA("[LOG]")" Logout process complete\n");
             break;
 //MARK: - Register
         } else if (strcmp(token, "register") == 0) { // registration
-            fprintf(stderr, "\033[35m[LOG]\033[0m Start register process\n");
+            fprintf(stderr, MAGENTA("[LOG]")" Start register process\n");
             char inputTokens[3][BUFFERSIZE] = {0}; // 1 = ID, 2 = password
             int parameterIndex = 0;
             while (token != NULL) {
@@ -168,7 +236,7 @@ static void handle_client(int perClientSocket) {
             } // tokenize input
 
             // check if user ID is already taken
-            fprintf(stderr, "\033[35m[LOG]\033[0m  | Checking if user exists\n");
+            fprintf(stderr, MAGENTA("[LOG]")"  | Checking if user exists\n");
             bool userExists = false;
             pthread_mutex_lock(&registeredUsers_mutex);
             User *u = registeredUsers;
@@ -181,8 +249,8 @@ static void handle_client(int perClientSocket) {
             }
 
             if (!userExists) { // if not, insert new user to linked list
-                fprintf(stderr, "\033[35m[LOG]\033[0m  | User doesn't exit\n");
-                fprintf(stderr, "\033[35m[LOG]\033[0m  | Insert new user to registered list\n");
+                fprintf(stderr, MAGENTA("[LOG]")"  | User doesn't exit\n");
+                fprintf(stderr, MAGENTA("[LOG]")"  | Insert new user to registered list\n");
                 User *newUser = (User *)calloc(1, sizeof(User));
                 newUser -> next = NULL;
                 newUser -> prev = NULL;
@@ -202,19 +270,19 @@ static void handle_client(int perClientSocket) {
                 char completionMessage[] = "Registration complete, please login to start using the service.\n";
                 send(perClientSocket, completionMessage, strlen(completionMessage), 0);
             } else {
-                fprintf(stderr, "\033[35m[LOG]\033[0m  | User already exists\n");
+                fprintf(stderr, MAGENTA("[LOG]")"  | User already exists\n");
                 char errorMessage[] = "This ID has been taken, please choose another one.\n";
                 send(perClientSocket, errorMessage, strlen(errorMessage), 0);
             }
 
             // Close connection
             close(perClientSocket);
-            fprintf(stderr, "\033[35m[LOG]\033[0m  | Connection to client %s:%d closed\n", ip_str, port);
-            fprintf(stderr, "\033[35m[LOG]\033[0m Register process complete\n");
+            fprintf(stderr, MAGENTA("[LOG]")"  | Connection to client %s:%d closed\n", ip_str, port);
+            fprintf(stderr, MAGENTA("[LOG]")" Register process complete\n");
             break;
 //MARK: - Login
         } else if (strcmp(token, "login") == 0) {
-            fprintf(stderr, "\033[35m[LOG]\033[0m Start login process\n");
+            fprintf(stderr, MAGENTA("[LOG]")" Start login process\n");
             char inputTokens[3][BUFFERSIZE] = {0}; // 1 = ID, 2 = password
             int parameterIndex = 0;
             while (token != NULL) {
@@ -224,7 +292,7 @@ static void handle_client(int perClientSocket) {
             } // tokenize input
 
             // check if user is already registered
-            fprintf(stderr, "\033[35m[LOG]\033[0m  | Checking if user is registered\n");
+            fprintf(stderr, MAGENTA("[LOG]")"  | Checking if user is registered\n");
             bool userRegistered = false;
             User *u = NULL;
 
@@ -241,47 +309,47 @@ static void handle_client(int perClientSocket) {
 
             // user not registered
             if (!userRegistered) {
-                fprintf(stderr, "\033[35m[LOG]\033[0m  | User not registered\n");
+                fprintf(stderr, MAGENTA("[LOG]")"  | User not registered\n");
                 char errorMessage[] = "No know user with this ID, please register first.\n";
                 send(perClientSocket, errorMessage, strlen(errorMessage), 0);
 
                 // Close the connected socket
                 close(perClientSocket);
-                fprintf(stderr, "\033[35m[LOG]\033[0m  | Connection to client %s:%d closed\n", ip_str, port);
-                fprintf(stderr, "\033[35m[LOG]\033[0m Login failed\n");
+                fprintf(stderr, MAGENTA("[LOG]")"  | Connection to client %s:%d closed\n", ip_str, port);
+                fprintf(stderr, MAGENTA("[LOG]")" Login failed\n");
                 break;
             }
 
             // user registered, check password
-            fprintf(stderr, "\033[35m[LOG]\033[0m  | User is registered\n");
-            fprintf(stderr, "\033[35m[LOG]\033[0m  | Checking password\n");
+            fprintf(stderr, MAGENTA("[LOG]")"  | User is registered\n");
+            fprintf(stderr, MAGENTA("[LOG]")"  | Checking password\n");
             if (strcmp(u -> password, inputTokens[2]) != 0) {
-                fprintf(stderr, "\033[35m[LOG]\033[0m  | Incorrect password\n");
+                fprintf(stderr, MAGENTA("[LOG]")"  | Incorrect password\n");
                 char errorMessage[] = "Incorrect password, please try again.\n";
                 send(perClientSocket, errorMessage, strlen(errorMessage), 0);
 
                 // Close connection
                 close(perClientSocket);
-                fprintf(stderr, "\033[35m[LOG]\033[0m  | Connection to client %s:%d closed\n", ip_str, port);
-                fprintf(stderr, "\033[35m[LOG]\033[0m Login failed\n");
+                fprintf(stderr, MAGENTA("[LOG]")"  | Connection to client %s:%d closed\n", ip_str, port);
+                fprintf(stderr, MAGENTA("[LOG]")" Login failed\n");
                 break;
             }
 
             
-            fprintf(stderr, "\033[35m[LOG]\033[0m  | Password accepted\n");
+            fprintf(stderr, MAGENTA("[LOG]")"  | Password accepted\n");
             
             // Record client listening port
-            fprintf(stderr, "\033[35m[LOG]\033[0m  | Requesting client listening port number\n");
+            fprintf(stderr, MAGENTA("[LOG]")"  | Requesting client listening port number\n");
             char response[] = "OK.";
             send(perClientSocket, response, BUFFERSIZE, 0);
             int32_t clientListenPort;
             readVal = read(perClientSocket, &clientListenPort, BUFFERSIZE);
-            fprintf(stderr, "\033[35m[LOG]\033[0m  | Recieved client listening port number: %d\n", ntohs(clientListenPort));
+            fprintf(stderr, MAGENTA("[LOG]")"  | Recieved client listening port number: %d\n", ntohs(clientListenPort));
             struct sockaddr_in clientListenAddress = client_address;
             clientListenAddress.sin_port = clientListenPort;
             
             // password correct, insert to logged in list
-            fprintf(stderr, "\033[35m[LOG]\033[0m  | Inserting user to logged-in list\n");
+            fprintf(stderr, MAGENTA("[LOG]")"  | Inserting user to logged-in list\n");
             User *newLogin = (User *)calloc(1, sizeof(User));
             newLogin -> next = NULL;
             newLogin -> prev = NULL;
@@ -302,10 +370,10 @@ static void handle_client(int perClientSocket) {
 
             char completionMessage[] = "Successfully logged in.\n";
             send(perClientSocket, completionMessage, BUFFERSIZE, 0);
-            fprintf(stderr, "\033[35m[LOG]\033[0m Login process complete\n");
+            fprintf(stderr, MAGENTA("[LOG]")" Login process complete\n");
 //MARK: - List
         } else if (strcmp(token, "list") == 0) {
-            fprintf(stderr, "\033[35m[LOG]\033[0m Start list process\n");
+            fprintf(stderr, MAGENTA("[LOG]")" Start list process\n");
             pthread_mutex_lock(&loggedInUsers_mutex);
             User *u = loggedInUsers;
             while (u != NULL) {
@@ -316,95 +384,12 @@ static void handle_client(int perClientSocket) {
 
             char completionMessage[] = "END OF USER LIST";
             send(perClientSocket, completionMessage, BUFFERSIZE, 0);
-            fprintf(stderr, "\033[35m[LOG]\033[0m  | Sent user list to client\n");
-            fprintf(stderr, "\033[35m[LOG]\033[0m List process complete\n");
+            fprintf(stderr, MAGENTA("[LOG]")"  | Sent user list to client\n");
+            fprintf(stderr, MAGENTA("[LOG]")" List process complete\n");
         } else {
             // Unknown command
             char errorMessage[] = "Unknown command.\n";
             send(perClientSocket, errorMessage, strlen(errorMessage), 0);
         }
     }
-}
-
-// Worker thread function to process client connections
-void* worker_thread(void* arg) {
-    (void)arg;
-    while (1) {
-        int clientSock = queue_pop(&job_queue);
-        handle_client(clientSock);
-    }
-    return NULL;
-}
-
-int main(int argc, char const* argv[]) {
-//MARK: - main
-    int serverSocket, perClientSocket; // socket used for listening and socket created for each client
-    struct sockaddr_in address; // IP and port number to bind the socket to
-    socklen_t addrlen = sizeof(address); // length of address
-
-    // Initialize job queue
-    queue_init(&job_queue);
-
-    // Create socket file descriptor, use IPv4 and TCP
-    if ((serverSocket = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-        perror("\n\033[31mSocket creation failed\033[0m\n");
-        exit(EXIT_FAILURE);
-    }
-    fprintf(stderr, "\033[35m[LOG]\033[0m Socket created\n");
-
-    // Attach serverSocket to the port 12000
-    int opt = 1;
-    if (setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
-        perror("\n\033[31mSet socket options failed\033[0m\n");
-        exit(EXIT_FAILURE);
-    }
-    if (setsockopt(serverSocket, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt))) {
-        perror("\n\033[31mSet socket options failed\033[0m\n");
-        exit(EXIT_FAILURE);
-    }
-    address.sin_family = AF_INET; // address family is IPv4
-    address.sin_addr.s_addr = INADDR_ANY; // socket will be bound to all local interfaces
-    address.sin_port = htons(SERVERPORT); // set port number
-    if (bind(serverSocket, (struct sockaddr*)&address, addrlen) < 0) {
-        perror("\n\033[31mBinding socket to port failed\033[0m\n");
-        exit(EXIT_FAILURE);
-    }
-    fprintf(stderr, "\033[35m[LOG]\033[0m Socket attached to port\n");
-
-    // Listen for connections
-    int maxWaitingToConnect = 10;
-    if (listen(serverSocket, maxWaitingToConnect) < 0) {
-        perror("\n\033[31mListening for connection failed\033[0m\n");
-        exit(EXIT_FAILURE);
-    }
-
-    // Create worker threads for handling clients
-    pthread_t threads[THREAD_POOL_SIZE];
-    for (int i = 0; i < THREAD_POOL_SIZE; i++) {
-        if (pthread_create(&threads[i], NULL, worker_thread, NULL) != 0) {
-            perror("\n\033[31mFailed to create worker thread\033[0m\n");
-            exit(EXIT_FAILURE);
-        }
-    }
-    fprintf(stderr, "\033[35m[LOG]\033[0m Thread pool initialized\n");
-
-    while (true) { // keep listening for new connections
-        fprintf(stderr, "\033[35m[LOG]\033[0m Listening for connections\n");
-
-        // Accept connections
-        if ((perClientSocket = accept(serverSocket, (struct sockaddr*)&address, &addrlen)) < 0) {
-            perror("\n\033[31mAccepting connection failed\033[0m\n");
-            exit(EXIT_FAILURE);
-        }
-        
-        char ip_str[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &(address.sin_addr), ip_str, INET_ADDRSTRLEN);
-        int port = ntohs(address.sin_port);  // Convert back to host byte order
-        fprintf(stderr, "\033[35m[LOG]\033[0m Accepted client connection from %s:%d\n", ip_str, port);
-
-        // Add accepted client socket to the job queue for worker threads
-        queue_push(&job_queue, perClientSocket);
-    }
-
-    return 0;
 }

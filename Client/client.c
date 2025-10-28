@@ -8,80 +8,22 @@
 #include <assert.h>
 #include <stdio.h>
 
+#include "client.h"
+
 #define SERVERPORT 12014
 #define BUFFERSIZE 1024
-
-int connectToServer(int clientSocket) {
-    
-    struct sockaddr_in serverAddress; // IP and port number to bind the socket to
-    socklen_t addrlen = sizeof(serverAddress); // length of address
-    
-    // Create socket file descriptor
-    if ((clientSocket = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-        perror("\n\033[31mSocket creation failed\033[0m\n");
-        exit(EXIT_FAILURE);
-    }
-    
-    serverAddress.sin_family = AF_INET; // address family is IPv4
-    serverAddress.sin_port = htons(SERVERPORT); // set port number
-    
-    // Convert IPv4 and IPv6 addresses from text to binary form
-    if (inet_pton(AF_INET, "127.0.0.1", &serverAddress.sin_addr) <= 0) {
-        perror("\n\033[31mInvalid address/ Address not supported\033[0m\n");
-        exit(EXIT_FAILURE);
-    }
-    
-    // Connect to server
-    int status;
-    if ((status = connect(clientSocket, (struct sockaddr*)&serverAddress, addrlen)) < 0) {
-        perror("\n\033[31mConnection to server failed\033[0m\n");
-        exit(EXIT_FAILURE);
-    }
-    
-    return clientSocket;
-}
-
-int setListeningSocket(int listeningSocket, int listeningPort) {
-    struct sockaddr_in address; // IP and port number to bind the socket to
-    socklen_t addrlen = sizeof(address); // length of address
-    
-    // Create socket file descriptor, use IPv4 and TCP
-    if ((listeningSocket = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-        perror("\n\033[31mSocket creation failed\033[0m\n");
-        exit(EXIT_FAILURE);
-    }
-    // Attach serverSocket to the port 12000
-    int opt = 1;
-    if (setsockopt(listeningSocket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
-        perror("\n\033[31mSet socket options failed\033[0m\n");
-        exit(EXIT_FAILURE);
-    }
-    if (setsockopt(listeningSocket, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt))) {
-        perror("\n\033[31mSet socket options failed\033[0m\n");
-        exit(EXIT_FAILURE);
-    }
-    address.sin_family = AF_INET; // address family is IPv4
-    address.sin_addr.s_addr = INADDR_ANY; // socket will be bound to all local interfaces
-    address.sin_port = htons(listeningPort); // set port number
-    if (bind(listeningSocket, (struct sockaddr*)&address, addrlen) < 0) {
-        perror("\n\033[31mBinding socket to port failed\033[0m\n");
-        exit(EXIT_FAILURE);
-    }
-    
-    return listeningSocket;
-}
 
 int main(int argc, char const* argv[]) {
 //MARK: - Socket Setup
     if (argc != 2) {
-        printf("\n\033[31mUsage: ./client.out <Listening port number>\033[0m\n");
+        printf(RED("Usage: ./client.out <Listening port number>\n"));
         exit(-1);
     }
     
     int listeningSocket = 0, clientSocket = 0;
     int listeningPort = atoi(argv[1]); // socket fd
     if (listeningPort < 49152 || listeningPort > 65535) {
-        printf("\n\033[31mInvalid port number, please choose in the range of [49152, 65535]\033[0m\n");
+        printf(RED("Invalid port number, please choose in the range of [49152, 65535]\n"));
         exit(-1);
     }
     
@@ -194,24 +136,84 @@ int main(int argc, char const* argv[]) {
             } else {
                 send(clientSocket, token, strlen(token), 0); // Tell the server to list users
                 readVal = read(clientSocket, buffer, BUFFERSIZE); // Server response
-                printf("\033[32mOnline Users\n====================\033[0m\n");
+                printf(GREEN("Online Users\n====================\n"));
                 while (strcmp(buffer, "END OF USER LIST") != 0) {
-                    printf("\033[32m%s\033[0m\n", buffer);
+                    printf(GREEN("%s\n"), buffer);
                     memset(buffer, 0, sizeof(buffer)); // clear buffer
                     readVal = read(clientSocket, buffer, BUFFERSIZE);
                 }
             }
 //MARK: - Help
         } else if (strcmp(token, "help") == 0) {
-            printf("[\033[33m%-36s\033[0m: %-25s\n", "Registration", "register <ID> <password>");
-            printf("[\033[33m%-36s\033[0m: %-25s\n", "Login(must be registered)", "login <ID> <password>");
-            printf("[\033[33m%-36s\033[0m: %-25s\n", "Logout(must be logged in)", "logout");
-            printf("[\033[33m%-36s\033[0m: %-25s\n", "List Online Users(must be logged in)", "list");
-            printf("[\033[33m%-36s\033[0m: %-25s\n", "Exit Client Program", "exit");
+            printf(YELLOW("%-36s")": %-25s\n", "Registration", "register <ID> <password>");
+            printf(YELLOW("%-36s")": %-25s\n", "Login(must be registered)", "login <ID> <password>");
+            printf(YELLOW("%-36s")": %-25s\n", "Logout(must be logged in)", "logout");
+            printf(YELLOW("%-36s")": %-25s\n", "List Online Users(must be logged in)", "list");
+            printf(YELLOW("%-36s")": %-25s\n", "Exit Client Program", "exit");
         } else {
             printf("Unknown command, type \"help\" for usage.\n");
         }
     }
     
     return 0;
+}
+
+int connectToServer(int clientSocket) {
+    
+    struct sockaddr_in serverAddress; // IP and port number to bind the socket to
+    socklen_t addrlen = sizeof(serverAddress); // length of address
+    
+    // Create socket file descriptor
+    if ((clientSocket = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        perror(RED("Socket creation failed\n"));
+        exit(EXIT_FAILURE);
+    }
+    
+    serverAddress.sin_family = AF_INET; // address family is IPv4
+    serverAddress.sin_port = htons(SERVERPORT); // set port number
+    
+    // Convert IPv4 and IPv6 addresses from text to binary form
+    if (inet_pton(AF_INET, "127.0.0.1", &serverAddress.sin_addr) <= 0) {
+        perror(RED("Invalid address/ Address not supported\n"));
+        exit(EXIT_FAILURE);
+    }
+    
+    // Connect to server
+    int status;
+    if ((status = connect(clientSocket, (struct sockaddr*)&serverAddress, addrlen)) < 0) {
+        perror(RED("Connection to server failed\n"));
+        exit(EXIT_FAILURE);
+    }
+    
+    return clientSocket;
+}
+
+int setListeningSocket(int listeningSocket, int listeningPort) {
+    struct sockaddr_in address; // IP and port number to bind the socket to
+    socklen_t addrlen = sizeof(address); // length of address
+    
+    // Create socket file descriptor, use IPv4 and TCP
+    if ((listeningSocket = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        perror(RED("Socket creation failed\n"));
+        exit(EXIT_FAILURE);
+    }
+    // Attach serverSocket to the port 12000
+    int opt = 1;
+    if (setsockopt(listeningSocket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
+        perror(RED("Set socket options failed\n"));
+        exit(EXIT_FAILURE);
+    }
+    if (setsockopt(listeningSocket, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt))) {
+        perror(RED("Set socket options failed\n"));
+        exit(EXIT_FAILURE);
+    }
+    address.sin_family = AF_INET; // address family is IPv4
+    address.sin_addr.s_addr = INADDR_ANY; // socket will be bound to all local interfaces
+    address.sin_port = htons(listeningPort); // set port number
+    if (bind(listeningSocket, (struct sockaddr*)&address, addrlen) < 0) {
+        perror(RED("Binding socket to port failed\n"));
+        exit(EXIT_FAILURE);
+    }
+    
+    return listeningSocket;
 }

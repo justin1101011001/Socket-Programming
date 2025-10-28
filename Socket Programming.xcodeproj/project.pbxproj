@@ -6,6 +6,11 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		9336E75B2EB0611F00227405 /* Makefile in Sources */ = {isa = PBXBuildFile; fileRef = 9336E75A2EB0611F00227405 /* Makefile */; };
+		9336E75C2EB0611F00227405 /* Makefile in Sources */ = {isa = PBXBuildFile; fileRef = 9336E75A2EB0611F00227405 /* Makefile */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXCopyFilesBuildPhase section */
 		935A90A42EA0A64B0054BDE4 /* CopyFiles */ = {
 			isa = PBXCopyFilesBuildPhase;
@@ -28,6 +33,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		9336E75A2EB0611F00227405 /* Makefile */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.make; path = Makefile; sourceTree = "<group>"; };
 		935A90A62EA0A64B0054BDE4 /* Client */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = Client; sourceTree = BUILT_PRODUCTS_DIR; };
 		935A90B52EA0A6AF0054BDE4 /* Server */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = Server; sourceTree = BUILT_PRODUCTS_DIR; };
 		935BEC632EACC641004FA086 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; xcLanguageSpecificationIdentifier = xcode.lang.markdown; };
@@ -67,6 +73,7 @@
 		935A908B2EA014880054BDE4 = {
 			isa = PBXGroup;
 			children = (
+				9336E75A2EB0611F00227405 /* Makefile */,
 				935BEC632EACC641004FA086 /* README.md */,
 				935A90A72EA0A64B0054BDE4 /* Client */,
 				935A90B62EA0A6AF0054BDE4 /* Server */,
@@ -172,6 +179,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				9336E75B2EB0611F00227405 /* Makefile in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -179,6 +187,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				9336E75C2EB0611F00227405 /* Makefile in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
