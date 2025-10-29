@@ -48,5 +48,6 @@ int queue_pop(JobQueue *q);
 static void handle_client(int perClientSocket);
 void* worker_thread(void* arg);
 int setSocket(int serverSocket);
+void createThreads(void);
 
 #endif /* server_h */

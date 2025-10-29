@@ -32,20 +32,9 @@ int main(int argc, char const* argv[]) {
     struct sockaddr_in address; // IP and port number to bind the socket to
     socklen_t addrlen = sizeof(address); // length of address
 
-    // Initialize job queue
-    queue_init(&job_queue);
-    // Set up server listening socket
-    serverSocket = setSocket(serverSocket);
-
-    // Create worker threads for handling clients
-    pthread_t threads[THREAD_POOL_SIZE];
-    for (int i = 0; i < THREAD_POOL_SIZE; i++) {
-        if (pthread_create(&threads[i], NULL, worker_thread, NULL) != 0) {
-            perror(RED("Failed to create worker thread\n"));
-            exit(EXIT_FAILURE);
-        }
-    }
-    fprintf(stderr, MAGENTA("[LOG]")" Thread pool initialized\n");
+    queue_init(&job_queue); // Initialize job queue
+    serverSocket = setSocket(serverSocket); // Set up server listening socket
+    createThreads(); // Create worker threads for handling clients
 
     while (true) { // keep listening for new connections
         fprintf(stderr, MAGENTA("[LOG]")" Listening for connections\n");
@@ -56,6 +45,7 @@ int main(int argc, char const* argv[]) {
             exit(EXIT_FAILURE);
         }
         
+        // Get connection details
         char ip_str[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &(address.sin_addr), ip_str, INET_ADDRSTRLEN);
         int port = ntohs(address.sin_port);  // Convert back to host byte order
@@ -423,5 +413,17 @@ int setSocket(int serverSocket) {
         exit(EXIT_FAILURE);
     }
     
-    return serverSocket;;
+    return serverSocket;
+}
+
+void createThreads(void) {
+    pthread_t threads[THREAD_POOL_SIZE];
+       for (int i = 0; i < THREAD_POOL_SIZE; i++) {
+           if (pthread_create(&threads[i], NULL, worker_thread, NULL) != 0) {
+               perror(RED("Failed to create worker thread\n"));
+               exit(EXIT_FAILURE);
+           }
+       }
+       fprintf(stderr, MAGENTA("[LOG]")" Thread pool initialized\n");
+    return;
 }
