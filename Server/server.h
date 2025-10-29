@@ -51,5 +51,6 @@ int setSocket(int serverSocket);
 void createThreads(void);
 void sendMessage(int socket, char *buffer);
 void readMessage(int socket, char *buffer);
+void parseMessage(char *token, char (*input)[BUFFERSIZE]);
 
 #endif /* server_h */

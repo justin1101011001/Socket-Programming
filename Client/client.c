@@ -27,14 +27,13 @@ int main(int argc, char const* argv[]) {
         exit(-1);
     }
     
+    // Set listening socket
     listeningSocket = setListeningSocket(listeningSocket, listeningPort);
     
     char buffer[BUFFERSIZE] = {0}; // buffer for messages from server
     char inputBuffer[BUFFERSIZE] = {0}; // buffer for user input
-    ssize_t readVal; // read return value
     bool loggedIn = false; // is the user currently logged in
     
-    //int32_t messageLength;
     while (true) {
         printf("> ");
         fgets(inputBuffer, BUFFERSIZE, stdin); // read whole line of input
@@ -68,17 +67,8 @@ int main(int argc, char const* argv[]) {
             }
 //MARK: - Register
         } else if (strcmp(token, "register") == 0) {
-            int parameterIndex = 0;
             char sendBuffer[BUFFERSIZE] = "";
-            while (token != NULL) {
-                if (parameterIndex >= 4) {
-                    break;
-                }
-                strcat(sendBuffer, token);
-                strcat(sendBuffer, " ");
-                token = strtok(NULL, " ");
-                parameterIndex++;
-            } // rebuild user input
+            int parameterIndex = parseInput(token, sendBuffer);
             
             if (parameterIndex == 3) { // correct number of parameters
                 if (loggedIn) {
@@ -95,17 +85,8 @@ int main(int argc, char const* argv[]) {
             }
 //MARK: - Login
         } else if (strcmp(token, "login") == 0) {
-            int parameterIndex = 0;
             char sendBuffer[BUFFERSIZE] = "";
-            while (token != NULL) {
-                if (parameterIndex >= 4) {
-                    break;
-                }
-                strcat(sendBuffer, token);
-                strcat(sendBuffer, " ");
-                token = strtok(NULL, " ");
-                parameterIndex++;
-            } // rebuild user input
+            int parameterIndex = parseInput(token, sendBuffer);
             
             if (parameterIndex == 3) { // correct number of parameters
                 if (loggedIn) {
@@ -229,4 +210,18 @@ void readMessage(int socket, char *buffer) {
     read(socket, &messageLength, sizeof(messageLength));
     read(socket, buffer, ntohl(messageLength));
     return;
+}
+
+int parseInput(char *token, char *buffer){
+    int parameterIndex = 0;
+    while (token != NULL) {
+        if (parameterIndex >= 4) {
+            break;
+        }
+        strcat(buffer, token);
+        strcat(buffer, " ");
+        token = strtok(NULL, " ");
+        parameterIndex++;
+    } // rebuild user input
+    return parameterIndex;
 }

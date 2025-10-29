@@ -168,12 +168,7 @@ static void handle_client(int perClientSocket) {
         } else if (strcmp(token, "register") == 0) { // registration
             fprintf(stderr, MAGENTA("[LOG]")" Start register process\n");
             char inputTokens[3][BUFFERSIZE] = {0}; // 1 = ID, 2 = password
-            int parameterIndex = 0;
-            while (token != NULL) {
-                strcpy(inputTokens[parameterIndex], token);
-                token = strtok(NULL, " ");
-                parameterIndex++;
-            } // tokenize input
+            parseMessage(token, inputTokens);
 
             // check if user ID is already taken
             fprintf(stderr, MAGENTA("[LOG]")"  | Checking if user exists\n");
@@ -224,18 +219,12 @@ static void handle_client(int perClientSocket) {
         } else if (strcmp(token, "login") == 0) {
             fprintf(stderr, MAGENTA("[LOG]")" Start login process\n");
             char inputTokens[3][BUFFERSIZE] = {0}; // 1 = ID, 2 = password
-            int parameterIndex = 0;
-            while (token != NULL) {
-                strcpy(inputTokens[parameterIndex], token);
-                token = strtok(NULL, " ");
-                parameterIndex++;
-            } // tokenize input
+            parseMessage(token, inputTokens);
 
             // check if user is already registered
             fprintf(stderr, MAGENTA("[LOG]")"  | Checking if user is registered\n");
             bool userRegistered = false;
             User *u = NULL;
-
             pthread_mutex_lock(&registeredUsers_mutex);
             u = registeredUsers;
             while (u != NULL) {
@@ -274,7 +263,6 @@ static void handle_client(int perClientSocket) {
                 fprintf(stderr, MAGENTA("[LOG]")" Login failed\n");
                 break;
             }
-
             
             fprintf(stderr, MAGENTA("[LOG]")"  | Password accepted\n");
             
@@ -402,5 +390,15 @@ void readMessage(int socket, char *buffer) {
     int32_t messageLength;
     read(socket, &messageLength, sizeof(messageLength));
     read(socket, buffer, ntohl(messageLength));
+    return;
+}
+
+void parseMessage(char *token, char (*input)[BUFFERSIZE]) {
+    int parameterIndex = 0;
+    while (token != NULL) {
+        strcpy(input[parameterIndex], token);
+        token = strtok(NULL, " ");
+        parameterIndex++;
+    } // tokenize input
     return;
 }
