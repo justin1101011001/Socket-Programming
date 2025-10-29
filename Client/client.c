@@ -34,6 +34,7 @@ int main(int argc, char const* argv[]) {
     ssize_t readVal; // read return value
     bool loggedIn = false; // is the user currently logged in
     
+    int32_t messageLength;
     while (true) {
         memset(buffer, 0, sizeof(buffer)); // clear buffer
         printf("> ");
@@ -46,8 +47,12 @@ int main(int argc, char const* argv[]) {
         if (strcmp(token, "exit") == 0) { // exit and end the client process
             if (loggedIn) {
                 strcpy(token, "logout");
-                send(clientSocket, token, strlen(token), 0); // Tell the server to logout the user
-                readVal = read(clientSocket, buffer, BUFFERSIZE); // Server response
+                messageLength = htonl(strlen(token) + 1);
+                send(clientSocket, &messageLength, sizeof(messageLength), 0);
+                send(clientSocket, token, strlen(token) + 1, 0); // Tell the server to logout the user
+                
+                readVal = read(clientSocket, &messageLength, sizeof(messageLength)); // Server response
+                readVal = read(clientSocket, buffer, ntohl(messageLength));
                 close(clientSocket); // close connection
                 
                 loggedIn = false;
@@ -59,8 +64,12 @@ int main(int argc, char const* argv[]) {
             if (!loggedIn) {
                 printf("You are currently not logged in to any account.\n");
             } else {
-                send(clientSocket, token, strlen(token), 0); // Tell the server to logout the user
-                readVal = read(clientSocket, buffer, BUFFERSIZE ); // Server response
+                messageLength = htonl(strlen(token) + 1);
+                send(clientSocket, &messageLength, sizeof(messageLength), 0);
+                send(clientSocket, token, strlen(token) + 1, 0); // Tell the server to logout the user
+                
+                readVal = read(clientSocket, &messageLength, sizeof(messageLength)); // Server response
+                readVal = read(clientSocket, buffer, ntohl(messageLength));
                 close(clientSocket); // close connection
                 
                 loggedIn = false;
@@ -85,8 +94,12 @@ int main(int argc, char const* argv[]) {
                     printf("You are already logged in to an account, please logout before creating a new account.\n");
                 } else {
                     clientSocket = connectToServer(clientSocket); // connect
-                    send(clientSocket, sendBuffer, sizeof(sendBuffer), 0); // send request
-                    readVal = read(clientSocket, buffer, BUFFERSIZE); // Server response
+                    messageLength = htonl(strlen(sendBuffer) + 1); // send request
+                    send(clientSocket, &messageLength, sizeof(messageLength), 0);
+                    send(clientSocket, sendBuffer, strlen(sendBuffer) + 1, 0);
+                    
+                    readVal = read(clientSocket, &messageLength, sizeof(messageLength)); // Server response
+                    readVal = read(clientSocket, buffer, ntohl(messageLength));
                     close(clientSocket); // close connection
                     printf("%s", buffer);
                 }
@@ -112,8 +125,12 @@ int main(int argc, char const* argv[]) {
                     printf("You are already logged in to an account, please logout before logging in to another account.\n");
                 } else {
                     clientSocket = connectToServer(clientSocket); // connect
-                    send(clientSocket, sendBuffer, BUFFERSIZE, 0); // send request
-                    readVal = read(clientSocket, buffer, BUFFERSIZE); // Server response
+                    messageLength = htonl(strlen(sendBuffer) + 1);
+                    send(clientSocket, &messageLength, sizeof(messageLength), 0);
+                    send(clientSocket, sendBuffer, strlen(sendBuffer) + 1, 0); // send request
+                    
+                    readVal = read(clientSocket, &messageLength, sizeof(messageLength));
+                    readVal = read(clientSocket, buffer, ntohl(messageLength)); // Server response
                     
                     if (strncmp(buffer, "OK.", 3) == 0) { // if successfully logged in
                         int32_t formatted = htons(listeningPort);
@@ -121,7 +138,8 @@ int main(int argc, char const* argv[]) {
                         loggedIn = true;
  
                         memset(buffer, 0, sizeof(buffer)); // clear buffer
-                        readVal = read(clientSocket, buffer, BUFFERSIZE); // Server response
+                        readVal = read(clientSocket, &messageLength, sizeof(messageLength));
+                        readVal = read(clientSocket, buffer, ntohl(messageLength)); // Server response
                     }
                     
                     printf("%s", buffer);
@@ -134,13 +152,18 @@ int main(int argc, char const* argv[]) {
             if (!loggedIn) {
                 printf("You are currently not logged in, plaese login to use this feature.\n");
             } else {
-                send(clientSocket, token, strlen(token), 0); // Tell the server to list users
-                readVal = read(clientSocket, buffer, BUFFERSIZE); // Server response
+                messageLength = htonl(strlen(token) + 1);
+                send(clientSocket, &messageLength, sizeof(messageLength), 0);
+                send(clientSocket, token, strlen(token) + 1, 0); // Tell the server to list users
+                
+                readVal = read(clientSocket, &messageLength, sizeof(messageLength));
+                readVal = read(clientSocket, buffer, ntohl(messageLength)); // Server response
                 printf(GREEN("Online Users\n====================\n"));
                 while (strcmp(buffer, "END OF USER LIST") != 0) {
                     printf(GREEN("%s\n"), buffer);
                     memset(buffer, 0, sizeof(buffer)); // clear buffer
-                    readVal = read(clientSocket, buffer, BUFFERSIZE);
+                    readVal = read(clientSocket, &messageLength, sizeof(messageLength));
+                    readVal = read(clientSocket, buffer, ntohl(messageLength));
                 }
             }
 //MARK: - Help
