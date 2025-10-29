@@ -21,5 +21,7 @@
 
 int connectToServer(int clientSocket);
 int setListeningSocket(int listeningSocket, int listeningPort);
+void sendMessage(int socket, char *buffer);
+void readMessage(int socket, char *buffer);
 
 #endif /* client_h */
