@@ -138,8 +138,8 @@ int main(int argc, char const* argv[]) {
     return 0;
 }
 
+//MARK: - Helper Functions
 int connectToServer(int clientSocket) {
-    
     struct sockaddr_in serverAddress; // IP and port number to bind the socket to
     socklen_t addrlen = sizeof(serverAddress); // length of address
     

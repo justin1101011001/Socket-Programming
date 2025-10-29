@@ -28,9 +28,7 @@ JobQueue job_queue;
 
 int main(int argc, char const* argv[]) {
 //MARK: - main
-    int serverSocket = 0, perClientSocket; // socket used for listening and socket created for each client
-    struct sockaddr_in address; // IP and port number to bind the socket to
-    socklen_t addrlen = sizeof(address); // length of address
+    int serverSocket = 0, perClientSocket = 0; // socket used for listening and socket created for each client
 
     queue_init(&job_queue); // Initialize job queue
     serverSocket = setSocket(serverSocket); // Set up server listening socket
@@ -38,21 +36,8 @@ int main(int argc, char const* argv[]) {
 
     while (true) { // keep listening for new connections
         fprintf(stderr, MAGENTA("[LOG]")" Listening for connections\n");
-
-        // Accept connections
-        if ((perClientSocket = accept(serverSocket, (struct sockaddr*)&address, &addrlen)) < 0) {
-            perror(RED("Accepting connection failed\n"));
-            exit(EXIT_FAILURE);
-        }
-        
-        // Get connection details
-        char ip_str[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &(address.sin_addr), ip_str, INET_ADDRSTRLEN);
-        int port = ntohs(address.sin_port);  // Convert back to host byte order
-        fprintf(stderr, MAGENTA("[LOG]")" Accepted client connection from %s:%d\n", ip_str, port);
-
-        // Add accepted client socket to the job queue for worker threads
-        queue_push(&job_queue, perClientSocket);
+        perClientSocket = acceptConnection(perClientSocket, serverSocket); // Accept connections
+        queue_push(&job_queue, perClientSocket); // Add accepted client socket to the job queue for worker threads
     }
 
     return 0;
@@ -263,7 +248,6 @@ static void handle_client(int perClientSocket) {
                 fprintf(stderr, MAGENTA("[LOG]")" Login failed\n");
                 break;
             }
-            
             fprintf(stderr, MAGENTA("[LOG]")"  | Password accepted\n");
             
             // Record client listening port
@@ -401,4 +385,20 @@ void parseMessage(char *token, char (*input)[BUFFERSIZE]) {
         parameterIndex++;
     } // tokenize input
     return;
+}
+
+int acceptConnection(int perClientSocket, int serverSocket) {
+    struct sockaddr_in address; // IP and port number to bind the socket to
+    socklen_t addrlen = sizeof(address); // length of address
+    if ((perClientSocket = accept(serverSocket, (struct sockaddr*)&address, &addrlen)) < 0) {
+        perror(RED("Accepting connection failed\n"));
+        exit(EXIT_FAILURE);
+    }
+    
+    // Get connection details
+    char ip_str[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &(address.sin_addr), ip_str, INET_ADDRSTRLEN);
+    int port = ntohs(address.sin_port);  // Convert back to host byte order
+    fprintf(stderr, MAGENTA("[LOG]")" Accepted client connection from %s:%d\n", ip_str, port);
+    return perClientSocket;
 }
