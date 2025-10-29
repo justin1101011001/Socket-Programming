@@ -28,45 +28,14 @@ JobQueue job_queue;
 
 int main(int argc, char const* argv[]) {
 //MARK: - main
-    int serverSocket, perClientSocket; // socket used for listening and socket created for each client
+    int serverSocket = 0, perClientSocket; // socket used for listening and socket created for each client
     struct sockaddr_in address; // IP and port number to bind the socket to
     socklen_t addrlen = sizeof(address); // length of address
 
     // Initialize job queue
     queue_init(&job_queue);
-
-    // Create socket file descriptor, use IPv4 and TCP
-    if ((serverSocket = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-        perror(RED("Socket creation failed\n"));
-        exit(EXIT_FAILURE);
-    }
-    fprintf(stderr, MAGENTA("[LOG]")" Socket created\n");
-
-    // Attach serverSocket to the port 12000
-    int opt = 1;
-    if (setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
-        perror(RED("Set socket options failed\n"));
-        exit(EXIT_FAILURE);
-    }
-    if (setsockopt(serverSocket, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt))) {
-        perror(RED("Set socket options failed\n"));
-        exit(EXIT_FAILURE);
-    }
-    address.sin_family = AF_INET; // address family is IPv4
-    address.sin_addr.s_addr = INADDR_ANY; // socket will be bound to all local interfaces
-    address.sin_port = htons(SERVERPORT); // set port number
-    if (bind(serverSocket, (struct sockaddr*)&address, addrlen) < 0) {
-        perror(RED("Binding socket to port failed\n"));
-        exit(EXIT_FAILURE);
-    }
-    fprintf(stderr, MAGENTA("[LOG]")" Socket attached to port\n");
-
-    // Listen for connections
-    int maxWaitingToConnect = 10;
-    if (listen(serverSocket, maxWaitingToConnect) < 0) {
-        perror(RED("Listening for connection failed\n"));
-        exit(EXIT_FAILURE);
-    }
+    // Set up server listening socket
+    serverSocket = setSocket(serverSocket);
 
     // Create worker threads for handling clients
     pthread_t threads[THREAD_POOL_SIZE];
@@ -415,4 +384,44 @@ static void handle_client(int perClientSocket) {
             send(perClientSocket, sendBuffer, strlen(sendBuffer) + 1, 0);
         }
     }
+}
+
+int setSocket(int serverSocket) {
+    struct sockaddr_in address; // IP and port number to bind the socket to
+    socklen_t addrlen = sizeof(address); // length of address
+    
+    // Create socket file descriptor, use IPv4 and TCP
+    if ((serverSocket = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        perror(RED("Socket creation failed\n"));
+        exit(EXIT_FAILURE);
+    }
+    fprintf(stderr, MAGENTA("[LOG]")" Socket created\n");
+
+    // Attach serverSocket to the port 12000
+    int opt = 1;
+    if (setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
+        perror(RED("Set socket options failed\n"));
+        exit(EXIT_FAILURE);
+    }
+    if (setsockopt(serverSocket, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt))) {
+        perror(RED("Set socket options failed\n"));
+        exit(EXIT_FAILURE);
+    }
+    address.sin_family = AF_INET; // address family is IPv4
+    address.sin_addr.s_addr = INADDR_ANY; // socket will be bound to all local interfaces
+    address.sin_port = htons(SERVERPORT); // set port number
+    if (bind(serverSocket, (struct sockaddr*)&address, addrlen) < 0) {
+        perror(RED("Binding socket to port failed\n"));
+        exit(EXIT_FAILURE);
+    }
+    fprintf(stderr, MAGENTA("[LOG]")" Socket attached to port\n");
+
+    // Listen for connections
+    int maxWaitingToConnect = 10;
+    if (listen(serverSocket, maxWaitingToConnect) < 0) {
+        perror(RED("Listening for connection failed\n"));
+        exit(EXIT_FAILURE);
+    }
+    
+    return serverSocket;;
 }
