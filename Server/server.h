@@ -49,5 +49,7 @@ static void handle_client(int perClientSocket);
 void* worker_thread(void* arg);
 int setSocket(int serverSocket);
 void createThreads(void);
+void sendMessage(int socket, char *buffer);
+void readMessage(int socket, char *buffer);
 
 #endif /* server_h */

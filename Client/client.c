@@ -36,7 +36,6 @@ int main(int argc, char const* argv[]) {
     
     int32_t messageLength;
     while (true) {
-        memset(buffer, 0, sizeof(buffer)); // clear buffer
         printf("> ");
         fgets(inputBuffer, BUFFERSIZE, stdin); // read whole line of input
         inputBuffer[strcspn(inputBuffer, "\n")] = '\0'; // trim off the newline character at the end
@@ -161,7 +160,6 @@ int main(int argc, char const* argv[]) {
                 printf(GREEN("Online Users\n====================\n"));
                 while (strcmp(buffer, "END OF USER LIST") != 0) {
                     printf(GREEN("%s\n"), buffer);
-                    memset(buffer, 0, sizeof(buffer)); // clear buffer
                     readVal = read(clientSocket, &messageLength, sizeof(messageLength));
                     readVal = read(clientSocket, buffer, ntohl(messageLength));
                 }
