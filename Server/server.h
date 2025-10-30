@@ -53,5 +53,6 @@ void sendMessage(int socket, char *buffer);
 void readMessage(int socket, char *buffer);
 void parseMessage(char *token, char (*input)[BUFFERSIZE]);
 int acceptConnection(int socket, int serverSocket);
+void removeFromLoggedIn(User** currentUserPtr);
 
 #endif /* server_h */

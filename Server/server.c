@@ -43,56 +43,6 @@ int main(int argc, char const* argv[]) {
     return 0;
 }
 
-//MARK: - Threading
-// Initialize job queue
-void queue_init(JobQueue *q) {
-    q -> front = 0;
-    q -> rear = 0;
-    q -> count = 0;
-    pthread_mutex_init(&q -> mutex, NULL);
-    pthread_cond_init(&q -> cond_nonempty, NULL);
-    pthread_cond_init(&q -> cond_nonfull, NULL);
-    return;
-}
-
-// Push a socket descriptor into the job queue
-void queue_push(JobQueue *q, int sock) {
-    pthread_mutex_lock(&q -> mutex);
-    while (q -> count == JOB_QUEUE_SIZE) {
-        pthread_cond_wait(&q -> cond_nonfull, &q -> mutex);
-    }
-    q -> sockets[q -> rear] = sock;
-    q -> rear = (q -> rear + 1) % JOB_QUEUE_SIZE;
-    q -> count++;
-    pthread_cond_signal(&q -> cond_nonempty);
-    pthread_mutex_unlock(&q -> mutex);
-    return;
-}
-
-// Pop a socket descriptor from the job queue
-int queue_pop(JobQueue *q) {
-    pthread_mutex_lock(&q -> mutex);
-    while (q -> count == 0) {
-        pthread_cond_wait(&q -> cond_nonempty, &q -> mutex);
-    }
-    int sock = q -> sockets[q -> front];
-    q -> front = (q -> front + 1) % JOB_QUEUE_SIZE;
-    q -> count--;
-    pthread_cond_signal(&q -> cond_nonfull);
-    pthread_mutex_unlock(&q -> mutex);
-    return sock;
-}
-
-// Worker thread function to process client connections
-void* worker_thread(void* arg) {
-    (void)arg;
-    while (1) {
-        int clientSock = queue_pop(&job_queue);
-        handle_client(clientSock);
-    }
-    return NULL;
-}
-
 // MARK: - Chat Functions
 // Handle client communication and commands
 static void handle_client(int perClientSocket) {
@@ -125,19 +75,7 @@ static void handle_client(int perClientSocket) {
         if (strcmp(token, "logout") == 0) { // client wants to disconnect
             fprintf(stderr, MAGENTA("[LOG]")" Start logout process\n");
             if (currentUser != NULL) {
-                pthread_mutex_lock(&loggedInUsers_mutex);
-                if (loggedInUsers == currentUser) {
-                    loggedInUsers = currentUser -> next;
-                }
-                if (currentUser -> prev != NULL) {
-                    currentUser -> prev -> next = currentUser -> next;
-                }
-                if (currentUser -> next != NULL) {
-                    currentUser -> next -> prev = currentUser -> prev;
-                }
-                pthread_mutex_unlock(&loggedInUsers_mutex);
-                free(currentUser);
-                currentUser = NULL;
+                removeFromLoggedIn(&currentUser);
                 fprintf(stderr, MAGENTA("[LOG]")"  | Removed user from logged-in list\n");
             }
 
@@ -209,9 +147,8 @@ static void handle_client(int perClientSocket) {
             // check if user is already registered
             fprintf(stderr, MAGENTA("[LOG]")"  | Checking if user is registered\n");
             bool userRegistered = false;
-            User *u = NULL;
             pthread_mutex_lock(&registeredUsers_mutex);
-            u = registeredUsers;
+            User *u = registeredUsers;
             while (u != NULL) {
                 if (strcmp(u -> ID, inputTokens[1]) == 0) {
                     userRegistered = true;
@@ -309,6 +246,56 @@ static void handle_client(int perClientSocket) {
     return;
 }
 
+//MARK: - Threading
+// Initialize job queue
+void queue_init(JobQueue *q) {
+    q -> front = 0;
+    q -> rear = 0;
+    q -> count = 0;
+    pthread_mutex_init(&q -> mutex, NULL);
+    pthread_cond_init(&q -> cond_nonempty, NULL);
+    pthread_cond_init(&q -> cond_nonfull, NULL);
+    return;
+}
+
+// Push a socket descriptor into the job queue
+void queue_push(JobQueue *q, int sock) {
+    pthread_mutex_lock(&q -> mutex);
+    while (q -> count == JOB_QUEUE_SIZE) {
+        pthread_cond_wait(&q -> cond_nonfull, &q -> mutex);
+    }
+    q -> sockets[q -> rear] = sock;
+    q -> rear = (q -> rear + 1) % JOB_QUEUE_SIZE;
+    q -> count++;
+    pthread_cond_signal(&q -> cond_nonempty);
+    pthread_mutex_unlock(&q -> mutex);
+    return;
+}
+
+// Pop a socket descriptor from the job queue
+int queue_pop(JobQueue *q) {
+    pthread_mutex_lock(&q -> mutex);
+    while (q -> count == 0) {
+        pthread_cond_wait(&q -> cond_nonempty, &q -> mutex);
+    }
+    int sock = q -> sockets[q -> front];
+    q -> front = (q -> front + 1) % JOB_QUEUE_SIZE;
+    q -> count--;
+    pthread_cond_signal(&q -> cond_nonfull);
+    pthread_mutex_unlock(&q -> mutex);
+    return sock;
+}
+
+// Worker thread function to process client connections
+void* worker_thread(void* arg) {
+    (void)arg;
+    while (1) {
+        int clientSock = queue_pop(&job_queue);
+        handle_client(clientSock);
+    }
+    return NULL;
+}
+
 //MARK: - Set Socket
 int setSocket(int serverSocket) {
     struct sockaddr_in address; // IP and port number to bind the socket to
@@ -401,4 +388,22 @@ int acceptConnection(int perClientSocket, int serverSocket) {
     int port = ntohs(address.sin_port);  // Convert back to host byte order
     fprintf(stderr, MAGENTA("[LOG]")" Accepted client connection from %s:%d\n", ip_str, port);
     return perClientSocket;
+}
+
+void removeFromLoggedIn(User **currentUserPtr) {
+    User *currentUser = *currentUserPtr;
+    pthread_mutex_lock(&loggedInUsers_mutex);
+    if (loggedInUsers == currentUser) {
+        loggedInUsers = currentUser -> next;
+    }
+    if (currentUser -> prev != NULL) {
+        currentUser -> prev -> next = currentUser -> next;
+    }
+    if (currentUser -> next != NULL) {
+        currentUser -> next -> prev = currentUser -> prev;
+    }
+    pthread_mutex_unlock(&loggedInUsers_mutex);
+    free(currentUser);
+    *currentUserPtr = NULL;
+    return;
 }
