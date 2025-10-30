@@ -15,21 +15,10 @@
 
 int main(int argc, char const* argv[]) {
 //MARK: - Socket Setup
-    if (argc != 2) {
-        printf(RED("Usage: ./client.out <Listening port number>\n"));
-        exit(-1);
-    }
-    
+    int listeningPort = setListeingPort(argc, argv); // Get listening port from arguments
     int listeningSocket = 0, clientSocket = 0;
-    int listeningPort = atoi(argv[1]); // socket fd
-    if (listeningPort < 49152 || listeningPort > 65535) {
-        printf(RED("Invalid port number, please choose in the range of [49152, 65535]\n"));
-        exit(-1);
-    }
-    
-    // Set listening socket
-    listeningSocket = setListeningSocket(listeningSocket, listeningPort);
-    
+    listeningSocket = setListeningSocket(listeningSocket, listeningPort); // Set listening socket
+
     char buffer[BUFFERSIZE] = {0}; // buffer for messages from server
     char inputBuffer[BUFFERSIZE] = {0}; // buffer for user input
     bool loggedIn = false; // is the user currently logged in
@@ -47,7 +36,7 @@ int main(int argc, char const* argv[]) {
                 strcpy(token, "logout");
                 sendMessage(clientSocket, token);
                 readMessage(clientSocket, buffer);
-                close(clientSocket); // close connection
+                close(clientSocket);
                 
                 loggedIn = false;
                 printf("%s", buffer);
@@ -60,7 +49,7 @@ int main(int argc, char const* argv[]) {
             } else {
                 sendMessage(clientSocket, token);
                 readMessage(clientSocket, buffer);
-                close(clientSocket); // close connection
+                close(clientSocket);
                 
                 loggedIn = false;
                 printf("%s", buffer);
@@ -74,10 +63,10 @@ int main(int argc, char const* argv[]) {
                 if (loggedIn) {
                     printf("You are already logged in to an account, please logout before creating a new account.\n");
                 } else {
-                    clientSocket = connectToServer(clientSocket); // connect
+                    clientSocket = connectToServer(clientSocket);
                     sendMessage(clientSocket, sendBuffer);
                     readMessage(clientSocket, buffer);
-                    close(clientSocket); // close connection
+                    close(clientSocket);
                     printf("%s", buffer);
                 }
             } else {
@@ -92,7 +81,7 @@ int main(int argc, char const* argv[]) {
                 if (loggedIn) {
                     printf("You are already logged in to an account, please logout before logging in to another account.\n");
                 } else {
-                    clientSocket = connectToServer(clientSocket); // connect
+                    clientSocket = connectToServer(clientSocket);
                     sendMessage(clientSocket, sendBuffer);
                     readMessage(clientSocket, buffer);
                     
@@ -139,7 +128,7 @@ int main(int argc, char const* argv[]) {
 }
 
 //MARK: - Helper Functions
-int connectToServer(int clientSocket) {
+static int connectToServer(int clientSocket) {
     struct sockaddr_in serverAddress; // IP and port number to bind the socket to
     socklen_t addrlen = sizeof(serverAddress); // length of address
     
@@ -168,7 +157,7 @@ int connectToServer(int clientSocket) {
     return clientSocket;
 }
 
-int setListeningSocket(int listeningSocket, int listeningPort) {
+static int setListeningSocket(int listeningSocket, int listeningPort) {
     struct sockaddr_in address; // IP and port number to bind the socket to
     socklen_t addrlen = sizeof(address); // length of address
     
@@ -198,21 +187,21 @@ int setListeningSocket(int listeningSocket, int listeningPort) {
     return listeningSocket;
 }
 
-void sendMessage(int socket, char *buffer) {
+static void sendMessage(int socket, char *buffer) {
     int32_t messageLength = htonl(strlen(buffer) + 1);
     send(socket, &messageLength, sizeof(messageLength), 0);
     send(socket, buffer, strlen(buffer) + 1, 0);
     return;
 }
 
-void readMessage(int socket, char *buffer) {
+static void readMessage(int socket, char *buffer) {
     int32_t messageLength;
     read(socket, &messageLength, sizeof(messageLength));
     read(socket, buffer, ntohl(messageLength));
     return;
 }
 
-int parseInput(char *token, char *buffer){
+static int parseInput(char *token, char *buffer){
     int parameterIndex = 0;
     while (token != NULL) {
         if (parameterIndex >= 4) {
@@ -224,4 +213,18 @@ int parseInput(char *token, char *buffer){
         parameterIndex++;
     } // rebuild user input
     return parameterIndex;
+}
+
+static int setListeingPort(int argc, const char **argv) {
+    if (argc != 2) {
+        printf(RED("Usage: ./client.out <Listening port number>\n"));
+        exit(-1);
+    }
+    
+    int listeningPort = atoi(argv[1]); // socket fd
+    if (listeningPort < 49152 || listeningPort > 65535) {
+        printf(RED("Invalid port number, please choose in the range of [49152, 65535]\n"));
+        exit(-1);
+    }
+    return listeningPort;
 }

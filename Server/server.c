@@ -238,7 +238,7 @@ static void handle_client(int perClientSocket) {
 
 //MARK: - Threading
 // Initialize job queue
-void queue_init(JobQueue *q) {
+static void queue_init(JobQueue *q) {
     q -> front = 0;
     q -> rear = 0;
     q -> count = 0;
@@ -249,7 +249,7 @@ void queue_init(JobQueue *q) {
 }
 
 // Push a socket descriptor into the job queue
-void queue_push(JobQueue *q, int sock) {
+static void queue_push(JobQueue *q, int sock) {
     pthread_mutex_lock(&q -> mutex);
     while (q -> count == JOB_QUEUE_SIZE) {
         pthread_cond_wait(&q -> cond_nonfull, &q -> mutex);
@@ -263,7 +263,7 @@ void queue_push(JobQueue *q, int sock) {
 }
 
 // Pop a socket descriptor from the job queue
-int queue_pop(JobQueue *q) {
+static int queue_pop(JobQueue *q) {
     pthread_mutex_lock(&q -> mutex);
     while (q -> count == 0) {
         pthread_cond_wait(&q -> cond_nonempty, &q -> mutex);
@@ -277,7 +277,7 @@ int queue_pop(JobQueue *q) {
 }
 
 // Worker thread function to process client connections
-void* worker_thread(void* arg) {
+static void* worker_thread(void* arg) {
     (void)arg;
     while (1) {
         int clientSock = queue_pop(&job_queue);
@@ -287,7 +287,7 @@ void* worker_thread(void* arg) {
 }
 
 //MARK: - Set Socket
-int setSocket(int serverSocket) {
+static int setSocket(int serverSocket) {
     struct sockaddr_in address; // IP and port number to bind the socket to
     socklen_t addrlen = sizeof(address); // length of address
     
@@ -328,7 +328,7 @@ int setSocket(int serverSocket) {
 }
 
 //MARK: - Create Threads
-void createThreads(void) {
+static void createThreads(void) {
     pthread_t threads[THREAD_POOL_SIZE];
     for (int i = 0; i < THREAD_POOL_SIZE; i++) {
         if (pthread_create(&threads[i], NULL, worker_thread, NULL) != 0) {
@@ -340,21 +340,21 @@ void createThreads(void) {
     return;
 }
 
-void sendMessage(int socket, char *buffer) {
+static void sendMessage(int socket, char *buffer) {
     int32_t messageLength = htonl(strlen(buffer) + 1);
     send(socket, &messageLength, sizeof(messageLength), 0);
     send(socket, buffer, strlen(buffer) + 1, 0);
     return;
 }
 
-void readMessage(int socket, char *buffer) {
+static void readMessage(int socket, char *buffer) {
     int32_t messageLength;
     read(socket, &messageLength, sizeof(messageLength));
     read(socket, buffer, ntohl(messageLength));
     return;
 }
 
-void parseMessage(char *token, char (*input)[BUFFERSIZE]) {
+static void parseMessage(char *token, char (*input)[BUFFERSIZE]) {
     int parameterIndex = 0;
     while (token != NULL) {
         strcpy(input[parameterIndex], token);
@@ -364,7 +364,7 @@ void parseMessage(char *token, char (*input)[BUFFERSIZE]) {
     return;
 }
 
-int acceptConnection(int perClientSocket, int serverSocket) {
+static int acceptConnection(int perClientSocket, int serverSocket) {
     struct sockaddr_in address; // IP and port number to bind the socket to
     socklen_t addrlen = sizeof(address); // length of address
     if ((perClientSocket = accept(serverSocket, (struct sockaddr*)&address, &addrlen)) < 0) {
@@ -380,7 +380,7 @@ int acceptConnection(int perClientSocket, int serverSocket) {
     return perClientSocket;
 }
 
-void removeFromLoggedIn(User **currentUserPtr) {
+static void removeFromLoggedIn(User **currentUserPtr) {
     User *currentUser = *currentUserPtr;
     pthread_mutex_lock(&loggedInUsers_mutex);
     if (loggedInUsers == currentUser) {
@@ -398,7 +398,7 @@ void removeFromLoggedIn(User **currentUserPtr) {
     return;
 }
 
-bool checkUserInList(User **listHeadPtr, char *userID, pthread_mutex_t *lock) {
+static bool checkUserInList(User **listHeadPtr, char *userID, pthread_mutex_t *lock) {
     bool userExists = false;
     pthread_mutex_lock(lock);
     User *u = *listHeadPtr;

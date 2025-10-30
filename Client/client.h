@@ -19,10 +19,11 @@
 #define GREEN(msg) GREEN_TEXT msg RESET_TEXT
 #define YELLOW(msg) YELLOW_TEXT msg RESET_TEXT
 
-int connectToServer(int clientSocket);
-int setListeningSocket(int listeningSocket, int listeningPort);
-void sendMessage(int socket, char *buffer);
-void readMessage(int socket, char *buffer);
-int parseInput(char *token, char *buffer);
+static int connectToServer(int clientSocket);
+static int setListeningSocket(int listeningSocket, int listeningPort);
+static void sendMessage(int socket, char *buffer);
+static void readMessage(int socket, char *buffer);
+static int parseInput(char *token, char *buffer);
+static int setListeingPort(int argc, const char **argv);
 
 #endif /* client_h */
