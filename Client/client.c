@@ -19,7 +19,7 @@ int main(int argc, char const* argv[]) {
     int listeningSocket = 0, clientSocket = 0;
     listeningSocket = setListeningSocket(listeningSocket, listeningPort); // Set listening socket
 
-    char buffer[BUFFERSIZE] = {0}; // buffer for messages from server
+    char recvBuffer[BUFFERSIZE] = {0}; // buffer for messages from server
     char inputBuffer[BUFFERSIZE] = {0}; // buffer for user input
     bool loggedIn = false; // is the user currently logged in
     
@@ -35,11 +35,11 @@ int main(int argc, char const* argv[]) {
             if (loggedIn) {
                 strcpy(token, "logout");
                 sendMessage(clientSocket, token);
-                readMessage(clientSocket, buffer);
+                readMessage(clientSocket, recvBuffer);
                 close(clientSocket);
                 
                 loggedIn = false;
-                printf("%s", buffer);
+                printf("%s", recvBuffer);
             }
             break;
 //MARK: - Logout
@@ -48,11 +48,11 @@ int main(int argc, char const* argv[]) {
                 printf("You are currently not logged in to any account.\n");
             } else {
                 sendMessage(clientSocket, token);
-                readMessage(clientSocket, buffer);
+                readMessage(clientSocket, recvBuffer);
                 close(clientSocket);
                 
                 loggedIn = false;
-                printf("%s", buffer);
+                printf("%s", recvBuffer);
             }
 //MARK: - Register
         } else if (strcmp(token, "register") == 0) {
@@ -65,9 +65,9 @@ int main(int argc, char const* argv[]) {
                 } else {
                     clientSocket = connectToServer(clientSocket);
                     sendMessage(clientSocket, sendBuffer);
-                    readMessage(clientSocket, buffer);
+                    readMessage(clientSocket, recvBuffer);
                     close(clientSocket);
-                    printf("%s", buffer);
+                    printf("%s", recvBuffer);
                 }
             } else {
                 printf("Invalid parameters.\nUsage: register <ID> <password>\n");
@@ -83,17 +83,17 @@ int main(int argc, char const* argv[]) {
                 } else {
                     clientSocket = connectToServer(clientSocket);
                     sendMessage(clientSocket, sendBuffer);
-                    readMessage(clientSocket, buffer);
+                    readMessage(clientSocket, recvBuffer);
                     
-                    if (strncmp(buffer, "OK.", 3) == 0) { // if successfully logged in
+                    if (strncmp(recvBuffer, "OK.", 3) == 0) { // if successfully logged in
                         int32_t formatted = htons(listeningPort);
                         send(clientSocket, &formatted, sizeof(int32_t), 0);
                         loggedIn = true;
  
-                        readMessage(clientSocket, buffer);
+                        readMessage(clientSocket, recvBuffer);
                     }
                     
-                    printf("%s", buffer);
+                    printf("%s", recvBuffer);
                 }
             } else {
                 printf("Invalid parameters.\nUsage: login <ID> <password>\n");
@@ -104,12 +104,12 @@ int main(int argc, char const* argv[]) {
                 printf("You are currently not logged in, plaese login to use this feature.\n");
             } else {
                 sendMessage(clientSocket, token);
-                readMessage(clientSocket, buffer);
+                readMessage(clientSocket, recvBuffer);
                 
                 printf(GREEN("Online Users\n====================\n"));
-                while (strcmp(buffer, "END OF USER LIST") != 0) {
-                    printf(GREEN("%s\n"), buffer);
-                    readMessage(clientSocket, buffer);
+                while (strcmp(recvBuffer, "END OF USER LIST") != 0) {
+                    printf(GREEN("%s\n"), recvBuffer);
+                    readMessage(clientSocket, recvBuffer);
                 }
             }
 //MARK: - Help

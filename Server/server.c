@@ -47,7 +47,7 @@ int main(int argc, char const* argv[]) {
 // Handle client communication and commands
 static void handle_client(int perClientSocket) {
     
-    char buffer[BUFFERSIZE] = {0};
+    char recvBuffer[BUFFERSIZE] = {0};
     User *currentUser = NULL;
 
     // Get client address info
@@ -60,11 +60,10 @@ static void handle_client(int perClientSocket) {
 
     while (true) { // keep reading and processing messages from the current client
         
-        readMessage(perClientSocket, buffer);
-
-        fprintf(stderr, CYAN("[MESSAGE]")" Client %s:%d: %s\n", ip_str, port, buffer);
+        readMessage(perClientSocket, recvBuffer);
+        fprintf(stderr, CYAN("[MESSAGE]")" Client %s:%d: %s\n", ip_str, port, recvBuffer);
         char *token; // Pointer to store each token
-        token = strtok(buffer, " ");
+        token = strtok(recvBuffer, " ");
         if (token == NULL) {
             // Empty command, continue reading
             continue;
@@ -81,10 +80,9 @@ static void handle_client(int perClientSocket) {
             char sendBuffer[] = "Successfully logged out.\n";
             sendMessage(perClientSocket, sendBuffer);
 
-            // Close connection
             close(perClientSocket);
             fprintf(stderr, MAGENTA("[LOG]")"  | Connection to client %s:%d closed\n", ip_str, port);
-            fprintf(stderr, MAGENTA("[LOG]")" Logout process complete\n");
+            fprintf(stderr, MAGENTA("[LOG]")"  +-Logout process complete\n");
             break;
 //MARK: - Register
         } else if (strcmp(token, "register") == 0) { // registration
@@ -104,6 +102,8 @@ static void handle_client(int perClientSocket) {
                 newUser -> prev = NULL;
                 strcpy(newUser -> ID, inputTokens[1]);
                 strcpy(newUser -> password, inputTokens[2]);
+                
+                pthread_mutex_lock(&registeredUsers_mutex);
                 if (registeredUsers == NULL) {
                     registeredUsers = newUser;
                 } else {
@@ -111,8 +111,8 @@ static void handle_client(int perClientSocket) {
                     newUser -> next = registeredUsers;
                     registeredUsers = newUser;
                 }
+                pthread_mutex_unlock(&registeredUsers_mutex);
             }
-            pthread_mutex_unlock(&registeredUsers_mutex);
 
             if (!userExists) {
                 char sendBuffer[] = "Registration complete, please login to start using the service.\n";
@@ -122,11 +122,16 @@ static void handle_client(int perClientSocket) {
                 char sendBuffer[] = "This ID has been taken, please choose another one.\n";
                 sendMessage(perClientSocket, sendBuffer);
             }
-
-            // Close connection
+            
             close(perClientSocket);
             fprintf(stderr, MAGENTA("[LOG]")"  | Connection to client %s:%d closed\n", ip_str, port);
-            fprintf(stderr, MAGENTA("[LOG]")" Register process complete\n");
+            
+            if (!userExists) {
+                fprintf(stderr, MAGENTA("[LOG]")"  +-Register process complete\n");
+            } else {
+                fprintf(stderr, MAGENTA("[LOG]")"  +-Register failed\n");
+            }
+            
             break;
 //MARK: - Login
         } else if (strcmp(token, "login") == 0) {
@@ -154,10 +159,9 @@ static void handle_client(int perClientSocket) {
                 char sendBuffer[] = "No know user with this ID, please register first.\n";
                 sendMessage(perClientSocket, sendBuffer);
 
-                // Close the connected socket
                 close(perClientSocket);
                 fprintf(stderr, MAGENTA("[LOG]")"  | Connection to client %s:%d closed\n", ip_str, port);
-                fprintf(stderr, MAGENTA("[LOG]")" Login failed\n");
+                fprintf(stderr, MAGENTA("[LOG]")"  +-Login failed\n");
                 break;
             }
 
@@ -169,10 +173,9 @@ static void handle_client(int perClientSocket) {
                 char sendBuffer[] = "Incorrect password, please try again.\n";
                 sendMessage(perClientSocket, sendBuffer);
 
-                // Close connection
                 close(perClientSocket);
                 fprintf(stderr, MAGENTA("[LOG]")"  | Connection to client %s:%d closed\n", ip_str, port);
-                fprintf(stderr, MAGENTA("[LOG]")" Login failed\n");
+                fprintf(stderr, MAGENTA("[LOG]")"  +-Login failed\n");
                 break;
             }
             fprintf(stderr, MAGENTA("[LOG]")"  | Password accepted\n");
@@ -210,10 +213,11 @@ static void handle_client(int perClientSocket) {
 
             char sendBuffer[] = "Successfully logged in.\n";
             sendMessage(perClientSocket, sendBuffer);
-            fprintf(stderr, MAGENTA("[LOG]")" Login process complete\n");
+            fprintf(stderr, MAGENTA("[LOG]")"  +-Login process complete\n");
 //MARK: - List
         } else if (strcmp(token, "list") == 0) {
             fprintf(stderr, MAGENTA("[LOG]")" Start list process\n");
+            
             pthread_mutex_lock(&loggedInUsers_mutex);
             User *u = loggedInUsers;
             while (u != NULL) {
@@ -225,9 +229,8 @@ static void handle_client(int perClientSocket) {
             char sendBuffer[] = "END OF USER LIST";
             sendMessage(perClientSocket, sendBuffer);
             fprintf(stderr, MAGENTA("[LOG]")"  | Sent user list to client\n");
-            fprintf(stderr, MAGENTA("[LOG]")" List process complete\n");
-        } else {
-            // Unknown command
+            fprintf(stderr, MAGENTA("[LOG]")"  +-List process complete\n");
+        } else { // Unknown command
             char sendBuffer[] = "Unknown command.\n";
             sendMessage(perClientSocket, sendBuffer);
         }
