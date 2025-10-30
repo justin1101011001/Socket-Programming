@@ -58,7 +58,6 @@ static void handle_client(int perClientSocket) {
     inet_ntop(AF_INET, &(client_address.sin_addr), ip_str, INET_ADDRSTRLEN); // IP
     int port = ntohs(client_address.sin_port); // Port
 
-    //int32_t messageLength;
     while (true) { // keep reading and processing messages from the current client
         
         readMessage(perClientSocket, buffer);
@@ -95,16 +94,7 @@ static void handle_client(int perClientSocket) {
 
             // check if user ID is already taken
             fprintf(stderr, MAGENTA("[LOG]")"  | Checking if user exists\n");
-            bool userExists = false;
-            pthread_mutex_lock(&registeredUsers_mutex);
-            User *u = registeredUsers;
-            while (u != NULL) {
-                if (strcmp(u -> ID, inputTokens[1]) == 0) {
-                    userExists = true;
-                    break;
-                }
-                u = u -> next;
-            }
+            bool userExists = checkUserInList(&registeredUsers, inputTokens[1], &registeredUsers_mutex);
 
             if (!userExists) { // if not, insert new user to linked list
                 fprintf(stderr, MAGENTA("[LOG]")"  | User doesn't exit\n");
@@ -406,4 +396,19 @@ void removeFromLoggedIn(User **currentUserPtr) {
     free(currentUser);
     *currentUserPtr = NULL;
     return;
+}
+
+bool checkUserInList(User **listHeadPtr, char *userID, pthread_mutex_t *lock) {
+    bool userExists = false;
+    pthread_mutex_lock(lock);
+    User *u = *listHeadPtr;
+    while (u != NULL) {
+        if (strcmp(u -> ID, userID) == 0) {
+            userExists = true;
+            break;
+        }
+        u = u -> next;
+    }
+    pthread_mutex_unlock(lock);
+    return userExists;
 }

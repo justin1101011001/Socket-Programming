@@ -46,7 +46,7 @@ void queue_init(JobQueue *q);
 void queue_push(JobQueue *q, int sock);
 int queue_pop(JobQueue *q);
 static void handle_client(int perClientSocket);
-void* worker_thread(void* arg);
+void *worker_thread(void* arg);
 int setSocket(int serverSocket);
 void createThreads(void);
 void sendMessage(int socket, char *buffer);
@@ -54,5 +54,6 @@ void readMessage(int socket, char *buffer);
 void parseMessage(char *token, char (*input)[BUFFERSIZE]);
 int acceptConnection(int socket, int serverSocket);
 void removeFromLoggedIn(User** currentUserPtr);
+bool checkUserInList(User **listHeadPtr, char *userID, pthread_mutex_t *lock);
 
 #endif /* server_h */
