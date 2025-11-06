@@ -15,6 +15,9 @@
 #define THREAD_POOL_SIZE 10
 #define JOB_QUEUE_SIZE 16
 
+#define REGLIST 0
+#define LOGLIST 1
+
 // Mutexes for user lists
 pthread_mutex_t registeredUsers_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t loggedInUsers_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -28,13 +31,13 @@ JobQueue job_queue;
 
 int main(int argc, char const* argv[]) {
 //MARK: - main
-    int serverSocket = 0, perClientSocket = 0; // socket used for listening and socket created for each client
+    int serverSocket = 0, perClientSocket = 0; // Socket used for listening and socket created for each client
 
     queue_init(&job_queue); // Initialize job queue
     serverSocket = setSocket(serverSocket); // Set up server listening socket
     createThreads(); // Create worker threads for handling clients
 
-    while (true) { // keep listening for new connections
+    while (true) { // Keep listening for new connections
         fprintf(stderr, MAGENTA("[LOG]")" Listening for connections\n");
         perClientSocket = acceptConnection(perClientSocket, serverSocket); // Accept connections
         queue_push(&job_queue, perClientSocket); // Add accepted client socket to the job queue for worker threads
@@ -47,18 +50,18 @@ int main(int argc, char const* argv[]) {
 // Handle client communication and commands
 static void handle_client(int perClientSocket) {
     
-    char recvBuffer[BUFFERSIZE] = {0};
-    User *currentUser = NULL;
+    char recvBuffer[BUFFERSIZE] = {0}; // Buffer for recieving message from client
+    User *currentUser = NULL; // Pointer to currently logged in user serviced by this thread
 
     // Get client address info
     struct sockaddr_in client_address;
     socklen_t client_addrlen = sizeof(client_address);
     getpeername(perClientSocket, (struct sockaddr*)&client_address, &client_addrlen);
     char ip_str[INET_ADDRSTRLEN];
-    inet_ntop(AF_INET, &(client_address.sin_addr), ip_str, INET_ADDRSTRLEN); // IP
-    int port = ntohs(client_address.sin_port); // Port
+    inet_ntop(AF_INET, &(client_address.sin_addr), ip_str, INET_ADDRSTRLEN); // Get IP
+    int port = ntohs(client_address.sin_port); // Get Port
 
-    while (true) { // keep reading and processing messages from the current client
+    while (true) { // Keep reading and processing messages from the current client
         
         readMessage(perClientSocket, recvBuffer);
         fprintf(stderr, CYAN("[MESSAGE]")" Client %s:%d: %s\n", ip_str, port, recvBuffer);
@@ -70,10 +73,10 @@ static void handle_client(int perClientSocket) {
         }
 
 //MARK: - Logout
-        if (strcmp(token, "logout") == 0) { // client wants to disconnect
+        if (strcmp(token, "logout") == 0) { // Client wants to disconnect
             fprintf(stderr, MAGENTA("[LOG]")" Start logout process\n");
             if (currentUser != NULL) {
-                removeFromLoggedIn(&currentUser);
+                removeFromLoggedIn(&currentUser); // Update logged in user list
                 fprintf(stderr, MAGENTA("[LOG]")"  | Removed user from logged-in list\n");
             }
 
@@ -85,33 +88,20 @@ static void handle_client(int perClientSocket) {
             fprintf(stderr, MAGENTA("[LOG]")"  +-Logout process complete\n");
             break;
 //MARK: - Register
-        } else if (strcmp(token, "register") == 0) { // registration
+        } else if (strcmp(token, "register") == 0) {
             fprintf(stderr, MAGENTA("[LOG]")" Start register process\n");
             char inputTokens[3][BUFFERSIZE] = {0}; // 1 = ID, 2 = password
             parseMessage(token, inputTokens);
 
-            // check if user ID is already taken
+            // Check if user ID is already taken
             fprintf(stderr, MAGENTA("[LOG]")"  | Checking if user exists\n");
             User *userExists = checkUserInList(&registeredUsers, inputTokens[1], &registeredUsers_mutex);
+            // Returns NULL if the user doesn't exist yet, otherwise return the pointer to the user
 
-            if (!userExists) { // if not, insert new user to linked list
+            if (!userExists) { // If not, create and insert new user to linked list
                 fprintf(stderr, MAGENTA("[LOG]")"  | User doesn't exit\n");
                 fprintf(stderr, MAGENTA("[LOG]")"  | Insert new user to registered list\n");
-                User *newUser = (User *)calloc(1, sizeof(User));
-                newUser -> next = NULL;
-                newUser -> prev = NULL;
-                strcpy(newUser -> ID, inputTokens[1]);
-                strcpy(newUser -> password, inputTokens[2]);
-                
-                pthread_mutex_lock(&registeredUsers_mutex);
-                if (registeredUsers == NULL) {
-                    registeredUsers = newUser;
-                } else {
-                    registeredUsers -> prev = newUser;
-                    newUser -> next = registeredUsers;
-                    registeredUsers = newUser;
-                }
-                pthread_mutex_unlock(&registeredUsers_mutex);
+                createAndInsertUserToList(REGLIST, inputTokens[1], inputTokens[2], NULL);
             }
 
             if (!userExists) {
@@ -139,11 +129,12 @@ static void handle_client(int perClientSocket) {
             char inputTokens[3][BUFFERSIZE] = {0}; // 1 = ID, 2 = password
             parseMessage(token, inputTokens);
 
-            // check if user is already registered
+            // Check if user is already registered
             fprintf(stderr, MAGENTA("[LOG]")"  | Checking if user is registered\n");
             User *userRegistered = checkUserInList(&registeredUsers, inputTokens[1], &registeredUsers_mutex);
+            // Returns NULL if the user doesn't exist yet, otherwise return the pointer to the user
 
-            // user not registered
+            // User not registered
             if (!userRegistered) {
                 fprintf(stderr, MAGENTA("[LOG]")"  | User not registered\n");
                 char sendBuffer[] = "No know user with this ID, please register first.\n";
@@ -155,7 +146,7 @@ static void handle_client(int perClientSocket) {
                 break;
             }
 
-            // user registered, check password
+            // User registered, check password
             fprintf(stderr, MAGENTA("[LOG]")"  | User is registered\n");
             fprintf(stderr, MAGENTA("[LOG]")"  | Checking password\n");
             if (strcmp(userRegistered -> password, inputTokens[2]) != 0) {
@@ -170,7 +161,7 @@ static void handle_client(int perClientSocket) {
             }
             fprintf(stderr, MAGENTA("[LOG]")"  | Password accepted\n");
             
-            // Record client listening port
+            // Password correct, get client listening port
             fprintf(stderr, MAGENTA("[LOG]")"  | Requesting client listening port number\n");
             char response[] = "OK.";
             sendMessage(perClientSocket, response);
@@ -181,25 +172,10 @@ static void handle_client(int perClientSocket) {
             struct sockaddr_in clientListenAddress = client_address;
             clientListenAddress.sin_port = clientListenPort;
             
-            // password correct, insert to logged in list
+            // Create and insert user to logged in list
             fprintf(stderr, MAGENTA("[LOG]")"  | Inserting user to logged-in list\n");
-            User *newLogin = (User *)calloc(1, sizeof(User));
-            newLogin -> next = NULL;
-            newLogin -> prev = NULL;
-            newLogin -> address = clientListenAddress;
-            strcpy(newLogin -> ID, inputTokens[1]);
-
-            pthread_mutex_lock(&loggedInUsers_mutex);
-            if (loggedInUsers == NULL) { // insert to list
-                loggedInUsers = newLogin;
-            } else {
-                newLogin -> next = loggedInUsers;
-                loggedInUsers -> prev = newLogin;
-                loggedInUsers = newLogin;
-            }
-            pthread_mutex_unlock(&loggedInUsers_mutex);
-            
-            currentUser = newLogin;
+            currentUser = createAndInsertUserToList(LOGLIST, inputTokens[1], NULL, &clientListenAddress);
+            // Returns the newly created user entry
 
             char sendBuffer[] = "Successfully logged in.\n";
             sendMessage(perClientSocket, sendBuffer);
@@ -208,6 +184,7 @@ static void handle_client(int perClientSocket) {
         } else if (strcmp(token, "list") == 0) {
             fprintf(stderr, MAGENTA("[LOG]")" Start list process\n");
             
+            // Send the logged in list to client
             pthread_mutex_lock(&loggedInUsers_mutex);
             User *u = loggedInUsers;
             while (u != NULL) {
@@ -333,6 +310,8 @@ static void createThreads(void) {
     return;
 }
 
+
+//MARK: - Other Helpers
 static void sendMessage(int socket, char *buffer) {
     int32_t messageLength = htonl(strlen(buffer) + 1);
     send(socket, &messageLength, sizeof(messageLength), 0);
@@ -402,4 +381,40 @@ static User *checkUserInList(User **listHeadPtr, char *userID, pthread_mutex_t *
     }
     pthread_mutex_unlock(lock);
     return u;
+}
+
+static User *createAndInsertUserToList(bool mode, char *userID, char *password, struct sockaddr_in *clientListenAddress) {
+    User *inserted = (User *)calloc(1, sizeof(User));
+    inserted -> next = NULL;
+    inserted -> prev = NULL;
+    
+    if (mode == REGLIST) { // Insert to registeredUsers
+        strcpy(inserted -> ID, userID);
+        strcpy(inserted -> password, password);
+        
+        pthread_mutex_lock(&registeredUsers_mutex);
+        if (registeredUsers == NULL) {
+            registeredUsers = inserted;
+        } else {
+            registeredUsers -> prev = inserted;
+            inserted -> next = registeredUsers;
+            registeredUsers = inserted;
+        }
+        pthread_mutex_unlock(&registeredUsers_mutex);
+    } else if (mode == LOGLIST) { // Insert to loggedInUsers
+        strcpy(inserted -> ID, userID);
+        inserted -> address = *clientListenAddress;
+        
+        pthread_mutex_lock(&loggedInUsers_mutex);
+        if (loggedInUsers == NULL) { // insert to list
+            loggedInUsers = inserted;
+        } else {
+            inserted -> next = loggedInUsers;
+            loggedInUsers -> prev = inserted;
+            loggedInUsers = inserted;
+        }
+        pthread_mutex_unlock(&loggedInUsers_mutex);
+    }
+    
+    return inserted;
 }

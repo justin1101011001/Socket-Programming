@@ -55,5 +55,6 @@ static void parseMessage(char *token, char (*input)[BUFFERSIZE]);
 static int acceptConnection(int socket, int serverSocket);
 static void removeFromLoggedIn(User** currentUserPtr);
 static User *checkUserInList(User **listHeadPtr, char *userID, pthread_mutex_t *lock);
+static User *createAndInsertUserToList(bool mode, char *userID, char *password, struct sockaddr_in *clientListenAddress);
 
 #endif /* server_h */
