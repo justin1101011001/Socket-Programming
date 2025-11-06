@@ -172,6 +172,8 @@ static void handle_client(int perClientSocket) {
             struct sockaddr_in clientListenAddress = client_address;
             clientListenAddress.sin_port = clientListenPort;
             
+            sendMessage(perClientSocket, inputTokens[1]); // Send back user ID
+            
             // Create and insert user to logged in list
             fprintf(stderr, MAGENTA("[LOG]")"  | Inserting user to logged-in list\n");
             currentUser = createAndInsertUserToList(LOGLIST, inputTokens[1], NULL, &clientListenAddress);

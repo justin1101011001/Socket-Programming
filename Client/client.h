@@ -12,12 +12,14 @@
 #define RED_TEXT     "\033[31m"
 #define GREEN_TEXT   "\033[32m"
 #define YELLOW_TEXT  "\033[33m"
+#define BOLD_TEXT    "\033[1m"
 #define RESET_TEXT   "\033[0m"
 
 // Macro that wraps text in red formatting
 #define RED(msg) RED_TEXT msg RESET_TEXT
 #define GREEN(msg) GREEN_TEXT msg RESET_TEXT
 #define YELLOW(msg) YELLOW_TEXT msg RESET_TEXT
+#define BOLD(msg) BOLD_TEXT msg RESET_TEXT
 
 static int connectToServer(int clientSocket);
 static int setListeningSocket(int listeningSocket, int listeningPort);

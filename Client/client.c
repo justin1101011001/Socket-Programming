@@ -21,10 +21,11 @@ int main(int argc, char const* argv[]) {
 
     char recvBuffer[BUFFERSIZE] = {0}; // buffer for messages from server
     char inputBuffer[BUFFERSIZE] = {0}; // buffer for user input
+    char promptText[100] = "";
     bool loggedIn = false; // is the user currently logged in
     
     while (true) {
-        printf("> ");
+        printf(BOLD("%s> "), promptText);
         fgets(inputBuffer, BUFFERSIZE, stdin); // read whole line of input
         inputBuffer[strcspn(inputBuffer, "\n")] = '\0'; // trim off the newline character at the end
         char *token; // Pointer to store each token
@@ -51,6 +52,7 @@ int main(int argc, char const* argv[]) {
                 readMessage(clientSocket, recvBuffer);
                 close(clientSocket);
                 
+                promptText[0] = '\0';
                 loggedIn = false;
                 printf("%s", recvBuffer);
             }
@@ -90,6 +92,10 @@ int main(int argc, char const* argv[]) {
                         send(clientSocket, &formatted, sizeof(int32_t), 0);
                         loggedIn = true;
  
+                        readMessage(clientSocket, recvBuffer);
+                        strcpy(promptText, recvBuffer);
+                        strcat(promptText, " ");
+                        
                         readMessage(clientSocket, recvBuffer);
                     }
                     
