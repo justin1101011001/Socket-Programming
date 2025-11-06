@@ -54,6 +54,6 @@ static void readMessage(int socket, char *buffer);
 static void parseMessage(char *token, char (*input)[BUFFERSIZE]);
 static int acceptConnection(int socket, int serverSocket);
 static void removeFromLoggedIn(User** currentUserPtr);
-static bool checkUserInList(User **listHeadPtr, char *userID, pthread_mutex_t *lock);
+static User *checkUserInList(User **listHeadPtr, char *userID, pthread_mutex_t *lock);
 
 #endif /* server_h */

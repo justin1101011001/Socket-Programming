@@ -92,7 +92,7 @@ static void handle_client(int perClientSocket) {
 
             // check if user ID is already taken
             fprintf(stderr, MAGENTA("[LOG]")"  | Checking if user exists\n");
-            bool userExists = checkUserInList(&registeredUsers, inputTokens[1], &registeredUsers_mutex);
+            User *userExists = checkUserInList(&registeredUsers, inputTokens[1], &registeredUsers_mutex);
 
             if (!userExists) { // if not, insert new user to linked list
                 fprintf(stderr, MAGENTA("[LOG]")"  | User doesn't exit\n");
@@ -141,17 +141,7 @@ static void handle_client(int perClientSocket) {
 
             // check if user is already registered
             fprintf(stderr, MAGENTA("[LOG]")"  | Checking if user is registered\n");
-            bool userRegistered = false;
-            pthread_mutex_lock(&registeredUsers_mutex);
-            User *u = registeredUsers;
-            while (u != NULL) {
-                if (strcmp(u -> ID, inputTokens[1]) == 0) {
-                    userRegistered = true;
-                    break;
-                }
-                u = u -> next;
-            }
-            pthread_mutex_unlock(&registeredUsers_mutex);
+            User *userRegistered = checkUserInList(&registeredUsers, inputTokens[1], &registeredUsers_mutex);
 
             // user not registered
             if (!userRegistered) {
@@ -168,7 +158,7 @@ static void handle_client(int perClientSocket) {
             // user registered, check password
             fprintf(stderr, MAGENTA("[LOG]")"  | User is registered\n");
             fprintf(stderr, MAGENTA("[LOG]")"  | Checking password\n");
-            if (strcmp(u -> password, inputTokens[2]) != 0) {
+            if (strcmp(userRegistered -> password, inputTokens[2]) != 0) {
                 fprintf(stderr, MAGENTA("[LOG]")"  | Incorrect password\n");
                 char sendBuffer[] = "Incorrect password, please try again.\n";
                 sendMessage(perClientSocket, sendBuffer);
@@ -401,17 +391,15 @@ static void removeFromLoggedIn(User **currentUserPtr) {
     return;
 }
 
-static bool checkUserInList(User **listHeadPtr, char *userID, pthread_mutex_t *lock) {
-    bool userExists = false;
+static User *checkUserInList(User **listHeadPtr, char *userID, pthread_mutex_t *lock) {
     pthread_mutex_lock(lock);
     User *u = *listHeadPtr;
     while (u != NULL) {
         if (strcmp(u -> ID, userID) == 0) {
-            userExists = true;
             break;
         }
         u = u -> next;
     }
     pthread_mutex_unlock(lock);
-    return userExists;
+    return u;
 }
