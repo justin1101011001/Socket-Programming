@@ -1,6 +1,7 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <pthread.h>
 #include <stdlib.h>
@@ -29,19 +30,39 @@ User *loggedInUsers = NULL;
 // Global job queue
 JobQueue job_queue;
 
+// For server shutdown
+static volatile sig_atomic_t shuttingDown = 0;
+static int serverSocketGlobal = -1; // store listening socket globally
+
+static pthread_t workerThreads[THREAD_POOL_SIZE];
+static pthread_t consoleThread;
+
 int main(int argc, char const* argv[]) {
 //MARK: - main
     int serverSocket = 0, perClientSocket = 0; // Socket used for listening and socket created for each client
 
     queue_init(&job_queue); // Initialize job queue
     serverSocket = setSocket(serverSocket); // Set up server listening socket
-    createThreads(); // Create worker threads for handling clients
+    serverSocketGlobal = serverSocket;
 
-    while (true) { // Keep listening for new connections
+    createThreads(); // Create worker threads for handling clients and thread for handling shutdown
+
+    while (!shuttingDown) { // Keep listening for new connections
         fprintf(stderr, MAGENTA("[LOG]")" Listening for connections\n");
         perClientSocket = acceptConnection(perClientSocket, serverSocket); // Accept connections
+        if (perClientSocket < 0) {
+            if (shuttingDown) {
+                break; // expected during shutdown
+            } else {
+                continue; // or break depending on policy
+            }
+        }
         queue_push(&job_queue, perClientSocket); // Add accepted client socket to the job queue for worker threads
     }
+    
+    fprintf(stderr, YELLOW("[CONTROL]")" Stopping server, waiting for workers...\n");
+    cleanUp();
+    fprintf(stderr, YELLOW("[CONTROL]")" Clean up complete, exiting\n");
 
     return 0;
 }
@@ -237,9 +258,15 @@ static void queue_push(JobQueue *q, int sock) {
 // Pop a socket descriptor from the job queue
 static int queue_pop(JobQueue *q) {
     pthread_mutex_lock(&q -> mutex);
-    while (q -> count == 0) {
+    while (q -> count == 0 && !shuttingDown) {
         pthread_cond_wait(&q -> cond_nonempty, &q -> mutex);
     }
+    
+    if (q->count == 0 && shuttingDown) { // Shutdown
+        pthread_mutex_unlock(&q->mutex);
+        return -1; // sentinel to tell workers to exit
+    }
+    
     int sock = q -> sockets[q -> front];
     q -> front = (q -> front + 1) % JOB_QUEUE_SIZE;
     q -> count--;
@@ -253,9 +280,57 @@ static void* worker_thread(void* arg) {
     (void)arg;
     while (1) {
         int clientSock = queue_pop(&job_queue);
+        
+        if (clientSock < 0) { // Shutdown
+            break;
+        }
+        
         handle_client(clientSock);
     }
     return NULL;
+}
+
+static void *consoleWatcher(void *arg) {
+    char line[128];
+    while (fgets(line, sizeof line, stdin)) {
+        if (strncmp(line, "quit", 4) == 0 || strncmp(line, "exit", 4) == 0 || strncmp(line, "shutdown", 8) == 0) {
+            fprintf(stderr, YELLOW("[CONTROL]")" Shutdown requested from console\n");
+            shuttingDown = 1;
+            // Close the listening socket to unblock accept()
+            if (serverSocketGlobal >= 0) {
+                close(serverSocketGlobal);
+                serverSocketGlobal = -1;
+            }
+            break;
+        }
+    }
+    return NULL;
+}
+
+static void cleanUp(void) {
+    // Wake any waiting workers in case not already woken
+    pthread_mutex_lock(&job_queue.mutex);
+    pthread_cond_broadcast(&job_queue.cond_nonempty);
+    pthread_cond_broadcast(&job_queue.cond_nonfull);
+    pthread_mutex_unlock(&job_queue.mutex);
+    
+    // Join worker threads
+    for (int i = 0; i < THREAD_POOL_SIZE; i++) {
+        if (workerThreads[i]) {
+            pthread_join(workerThreads[i], NULL);
+        }
+    }
+    // Join console watcher thread
+    pthread_join(consoleThread, NULL);
+    
+    // Destroy job queue synchronization primitives
+    pthread_mutex_destroy(&job_queue.mutex);
+    pthread_cond_destroy(&job_queue.cond_nonempty);
+    pthread_cond_destroy(&job_queue.cond_nonfull);
+
+    // Destroy user list mutexes
+    pthread_mutex_destroy(&registeredUsers_mutex);
+    pthread_mutex_destroy(&loggedInUsers_mutex);
 }
 
 //MARK: - Set Socket
@@ -265,7 +340,7 @@ static int setSocket(int serverSocket) {
     
     // Create socket file descriptor, use IPv4 and TCP
     if ((serverSocket = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-        perror(RED("Socket creation failed\n"));
+        perror(RED("[ERROR]")" Socket creation failed\n");
         exit(EXIT_FAILURE);
     }
     fprintf(stderr, MAGENTA("[LOG]")" Socket created\n");
@@ -273,18 +348,18 @@ static int setSocket(int serverSocket) {
     // Attach serverSocket to the port 12000
     int opt = 1;
     if (setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
-        perror(RED("Set socket options failed\n"));
+        perror(RED("[ERROR]")" Set socket options failed\n");
         exit(EXIT_FAILURE);
     }
     if (setsockopt(serverSocket, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt))) {
-        perror(RED("Set socket options failed\n"));
+        perror(RED("[ERROR]")" Set socket options failed\n");
         exit(EXIT_FAILURE);
     }
     address.sin_family = AF_INET; // address family is IPv4
     address.sin_addr.s_addr = INADDR_ANY; // socket will be bound to all local interfaces
     address.sin_port = htons(SERVERPORT); // set port number
     if (bind(serverSocket, (struct sockaddr*)&address, addrlen) < 0) {
-        perror(RED("Binding socket to port failed\n"));
+        perror(RED("[ERROR]")" Binding socket to port failed\n");
         exit(EXIT_FAILURE);
     }
     fprintf(stderr, MAGENTA("[LOG]")" Socket attached to port\n");
@@ -292,7 +367,7 @@ static int setSocket(int serverSocket) {
     // Listen for connections
     int maxWaitingToConnect = 10;
     if (listen(serverSocket, maxWaitingToConnect) < 0) {
-        perror(RED("Listening for connection failed\n"));
+        perror(RED("[ERROR]")" Listening for connection failed\n");
         exit(EXIT_FAILURE);
     }
     
@@ -301,17 +376,22 @@ static int setSocket(int serverSocket) {
 
 //MARK: - Create Threads
 static void createThreads(void) {
-    pthread_t threads[THREAD_POOL_SIZE];
+    // Create watcher thread for shutdown command
+    if (pthread_create(&consoleThread, NULL, consoleWatcher, NULL) != 0) {
+        perror(RED("[ERROR]")" Failed to create console watcher thread\n");
+        exit(EXIT_FAILURE);
+    }
+    
+    // Create threads for servicing client connections
     for (int i = 0; i < THREAD_POOL_SIZE; i++) {
-        if (pthread_create(&threads[i], NULL, worker_thread, NULL) != 0) {
-            perror(RED("Failed to create worker thread\n"));
+        if (pthread_create(&workerThreads[i], NULL, worker_thread, NULL) != 0) {
+            perror(RED("[ERROR]")" Failed to create worker thread\n");
             exit(EXIT_FAILURE);
         }
     }
     fprintf(stderr, MAGENTA("[LOG]")" Thread pool initialized\n");
     return;
 }
-
 
 //MARK: - Other Helpers
 static void sendMessage(int socket, char *buffer) {
@@ -342,8 +422,12 @@ static int acceptConnection(int perClientSocket, int serverSocket) {
     struct sockaddr_in address; // IP and port number to bind the socket to
     socklen_t addrlen = sizeof(address); // length of address
     if ((perClientSocket = accept(serverSocket, (struct sockaddr*)&address, &addrlen)) < 0) {
-        perror(RED("Accepting connection failed\n"));
-        exit(EXIT_FAILURE);
+        if (shuttingDown) { // Listening socket closed on purpose
+            fprintf(stderr, YELLOW("[CONTROL]")" Accept interrupted by shutdown\n");
+        } else {
+            fprintf(stderr, RED("[ERROR]")" Accepting connection failed\n");
+        }
+        return -1;
     }
     
     // Get connection details
@@ -420,3 +504,4 @@ static User *createAndInsertUserToList(bool mode, char *userID, char *password, 
     
     return inserted;
 }
+

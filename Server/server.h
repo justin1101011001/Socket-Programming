@@ -14,6 +14,7 @@
 // ANSI color codes
 #define RED_TEXT     "\033[31m"
 #define GREEN_TEXT   "\033[32m"
+#define YELLOW_TEXT  "\033[33m"
 #define MAGENTA_TEXT "\033[35m"
 #define CYAN_TEXT    "\033[36m"
 #define RESET_TEXT   "\033[0m"
@@ -21,6 +22,7 @@
 // Macro that wraps text in red formatting
 #define RED(msg) RED_TEXT msg RESET_TEXT
 #define GREEN(msg) GREEN_TEXT msg RESET_TEXT
+#define YELLOW(msg) YELLOW_TEXT msg RESET_TEXT
 #define MAGENTA(msg) MAGENTA_TEXT msg RESET_TEXT
 #define CYAN(msg) CYAN_TEXT msg RESET_TEXT
 
@@ -56,5 +58,7 @@ static int acceptConnection(int socket, int serverSocket);
 static void removeFromLoggedIn(User** currentUserPtr);
 static User *checkUserInList(User **listHeadPtr, char *userID, pthread_mutex_t *lock);
 static User *createAndInsertUserToList(bool mode, char *userID, char *password, struct sockaddr_in *clientListenAddress);
+static void *consoleWatcher(void *arg);
+static void cleanUp(void);
 
 #endif /* server_h */
