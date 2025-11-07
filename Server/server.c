@@ -19,6 +19,9 @@
 #define REGLIST 0
 #define LOGLIST 1
 
+// File path to store registered users
+char *registeredUserFile = "./Data/registeredUsers";
+
 // Mutexes for user lists
 pthread_mutex_t registeredUsers_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t loggedInUsers_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -38,15 +41,15 @@ static pthread_t workerThreads[THREAD_POOL_SIZE];
 static pthread_t consoleThread;
 
 int main(int argc, char const* argv[]) {
-//MARK: - main
+    //MARK: - main
     int serverSocket = 0, perClientSocket = 0; // Socket used for listening and socket created for each client
-
+    
     queue_init(&job_queue); // Initialize job queue
     serverSocket = setSocket(serverSocket); // Set up server listening socket
     serverSocketGlobal = serverSocket;
-
+    readUsers(registeredUserFile); // Read registered users from file
     createThreads(); // Create worker threads for handling clients and thread for handling shutdown
-
+    
     while (!shuttingDown) { // Keep listening for new connections
         fprintf(stderr, MAGENTA("[LOG]")" Listening for connections\n");
         perClientSocket = acceptConnection(perClientSocket, serverSocket); // Accept connections
@@ -61,9 +64,10 @@ int main(int argc, char const* argv[]) {
     }
     
     fprintf(stderr, YELLOW("[CONTROL]")" Stopping server, waiting for workers...\n");
-    cleanUp();
+    cleanUp(); // Join threads and destroy mutexes
+    saveUsers(registeredUserFile); // Store registered users
     fprintf(stderr, YELLOW("[CONTROL]")" Clean up complete, exiting\n");
-
+    
     return 0;
 }
 
@@ -73,7 +77,7 @@ static void handle_client(int perClientSocket) {
     
     char recvBuffer[BUFFERSIZE] = {0}; // Buffer for recieving message from client
     User *currentUser = NULL; // Pointer to currently logged in user serviced by this thread
-
+    
     // Get client address info
     struct sockaddr_in client_address;
     socklen_t client_addrlen = sizeof(client_address);
@@ -81,7 +85,7 @@ static void handle_client(int perClientSocket) {
     char ip_str[INET_ADDRSTRLEN];
     inet_ntop(AF_INET, &(client_address.sin_addr), ip_str, INET_ADDRSTRLEN); // Get IP
     int port = ntohs(client_address.sin_port); // Get Port
-
+    
     while (true) { // Keep reading and processing messages from the current client
         
         readMessage(perClientSocket, recvBuffer);
@@ -92,39 +96,39 @@ static void handle_client(int perClientSocket) {
             // Empty command, continue reading
             continue;
         }
-
-//MARK: - Logout
+        
+        //MARK: - Logout
         if (strcmp(token, "logout") == 0) { // Client wants to disconnect
             fprintf(stderr, MAGENTA("[LOG]")" Start logout process\n");
             if (currentUser != NULL) {
                 removeFromLoggedIn(&currentUser); // Update logged in user list
                 fprintf(stderr, MAGENTA("[LOG]")"  | Removed user from logged-in list\n");
             }
-
+            
             char sendBuffer[] = "Successfully logged out.\n";
             sendMessage(perClientSocket, sendBuffer);
-
+            
             close(perClientSocket);
             fprintf(stderr, MAGENTA("[LOG]")"  | Connection to client %s:%d closed\n", ip_str, port);
             fprintf(stderr, MAGENTA("[LOG]")"  +-Logout process complete\n");
             break;
-//MARK: - Register
+            //MARK: - Register
         } else if (strcmp(token, "register") == 0) {
             fprintf(stderr, MAGENTA("[LOG]")" Start register process\n");
             char inputTokens[3][BUFFERSIZE] = {0}; // 1 = ID, 2 = password
             parseMessage(token, inputTokens);
-
+            
             // Check if user ID is already taken
             fprintf(stderr, MAGENTA("[LOG]")"  | Checking if user exists\n");
             User *userExists = checkUserInList(&registeredUsers, inputTokens[1], &registeredUsers_mutex);
             // Returns NULL if the user doesn't exist yet, otherwise return the pointer to the user
-
+            
             if (!userExists) { // If not, create and insert new user to linked list
                 fprintf(stderr, MAGENTA("[LOG]")"  | User doesn't exit\n");
                 fprintf(stderr, MAGENTA("[LOG]")"  | Insert new user to registered list\n");
                 createAndInsertUserToList(REGLIST, inputTokens[1], inputTokens[2], NULL);
             }
-
+            
             if (!userExists) {
                 char sendBuffer[] = "Registration complete, please login to start using the service.\n";
                 sendMessage(perClientSocket, sendBuffer);
@@ -144,29 +148,29 @@ static void handle_client(int perClientSocket) {
             }
             
             break;
-//MARK: - Login
+            //MARK: - Login
         } else if (strcmp(token, "login") == 0) {
             fprintf(stderr, MAGENTA("[LOG]")" Start login process\n");
             char inputTokens[3][BUFFERSIZE] = {0}; // 1 = ID, 2 = password
             parseMessage(token, inputTokens);
-
+            
             // Check if user is already registered
             fprintf(stderr, MAGENTA("[LOG]")"  | Checking if user is registered\n");
             User *userRegistered = checkUserInList(&registeredUsers, inputTokens[1], &registeredUsers_mutex);
             // Returns NULL if the user doesn't exist yet, otherwise return the pointer to the user
-
+            
             // User not registered
             if (!userRegistered) {
                 fprintf(stderr, MAGENTA("[LOG]")"  | User not registered\n");
                 char sendBuffer[] = "No know user with this ID, please register first.\n";
                 sendMessage(perClientSocket, sendBuffer);
-
+                
                 close(perClientSocket);
                 fprintf(stderr, MAGENTA("[LOG]")"  | Connection to client %s:%d closed\n", ip_str, port);
                 fprintf(stderr, MAGENTA("[LOG]")"  +-Login failed\n");
                 break;
             }
-
+            
             // User registered, check password
             fprintf(stderr, MAGENTA("[LOG]")"  | User is registered\n");
             fprintf(stderr, MAGENTA("[LOG]")"  | Checking password\n");
@@ -174,7 +178,7 @@ static void handle_client(int perClientSocket) {
                 fprintf(stderr, MAGENTA("[LOG]")"  | Incorrect password\n");
                 char sendBuffer[] = "Incorrect password, please try again.\n";
                 sendMessage(perClientSocket, sendBuffer);
-
+                
                 close(perClientSocket);
                 fprintf(stderr, MAGENTA("[LOG]")"  | Connection to client %s:%d closed\n", ip_str, port);
                 fprintf(stderr, MAGENTA("[LOG]")"  +-Login failed\n");
@@ -199,11 +203,11 @@ static void handle_client(int perClientSocket) {
             fprintf(stderr, MAGENTA("[LOG]")"  | Inserting user to logged-in list\n");
             currentUser = createAndInsertUserToList(LOGLIST, inputTokens[1], NULL, &clientListenAddress);
             // Returns the newly created user entry
-
+            
             char sendBuffer[] = "Successfully logged in.\n";
             sendMessage(perClientSocket, sendBuffer);
             fprintf(stderr, MAGENTA("[LOG]")"  +-Login process complete\n");
-//MARK: - List
+            //MARK: - List
         } else if (strcmp(token, "list") == 0) {
             fprintf(stderr, MAGENTA("[LOG]")" Start list process\n");
             
@@ -215,7 +219,7 @@ static void handle_client(int perClientSocket) {
                 u = u -> next;
             }
             pthread_mutex_unlock(&loggedInUsers_mutex);
-
+            
             char sendBuffer[] = "END OF USER LIST";
             sendMessage(perClientSocket, sendBuffer);
             fprintf(stderr, MAGENTA("[LOG]")"  | Sent user list to client\n");
@@ -322,15 +326,26 @@ static void cleanUp(void) {
     }
     // Join console watcher thread
     pthread_join(consoleThread, NULL);
+    fprintf(stderr, MAGENTA("[LOG]")" Joined all threads\n");
     
     // Destroy job queue synchronization primitives
     pthread_mutex_destroy(&job_queue.mutex);
     pthread_cond_destroy(&job_queue.cond_nonempty);
     pthread_cond_destroy(&job_queue.cond_nonfull);
-
+    
     // Destroy user list mutexes
     pthread_mutex_destroy(&registeredUsers_mutex);
     pthread_mutex_destroy(&loggedInUsers_mutex);
+    fprintf(stderr, MAGENTA("[LOG]")" Destroyed mutexes\n");
+    
+    // Free logged in user list
+    User *u;
+    while (loggedInUsers != NULL) {
+        u = loggedInUsers;
+        loggedInUsers = loggedInUsers -> next;
+        free(u);
+    }
+    fprintf(stderr, MAGENTA("[LOG]")" Freed logged in user list\n");
 }
 
 //MARK: - Set Socket
@@ -344,7 +359,7 @@ static int setSocket(int serverSocket) {
         exit(EXIT_FAILURE);
     }
     fprintf(stderr, MAGENTA("[LOG]")" Socket created\n");
-
+    
     // Attach serverSocket to the port 12000
     int opt = 1;
     if (setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
@@ -363,7 +378,7 @@ static int setSocket(int serverSocket) {
         exit(EXIT_FAILURE);
     }
     fprintf(stderr, MAGENTA("[LOG]")" Socket attached to port\n");
-
+    
     // Listen for connections
     int maxWaitingToConnect = 10;
     if (listen(serverSocket, maxWaitingToConnect) < 0) {
@@ -423,7 +438,7 @@ static int acceptConnection(int perClientSocket, int serverSocket) {
     socklen_t addrlen = sizeof(address); // length of address
     if ((perClientSocket = accept(serverSocket, (struct sockaddr*)&address, &addrlen)) < 0) {
         if (shuttingDown) { // Listening socket closed on purpose
-            fprintf(stderr, YELLOW("[CONTROL]")" Accept interrupted by shutdown\n");
+            fprintf(stderr, MAGENTA("[LOG]")" Accept interrupted by shutdown\n");
         } else {
             fprintf(stderr, RED("[ERROR]")" Accepting connection failed\n");
         }
@@ -505,3 +520,65 @@ static User *createAndInsertUserToList(bool mode, char *userID, char *password, 
     return inserted;
 }
 
+static void saveUsers(char *fileName) {
+    FILE *file = fopen(fileName, "wb");
+    if (!file) {
+        perror(RED("[ERROR]")" Failed to open file to save registered users\n");
+        return;
+    }
+    
+    User *delete, *u = registeredUsers;
+    while (u != NULL) {
+        // Write the ID, password, and sockaddr_in
+        fwrite(u -> ID, sizeof(char), BUFFERSIZE, file);
+        fwrite(u -> password, sizeof(char), BUFFERSIZE, file);
+        fwrite(&(u -> address), sizeof(struct sockaddr_in), 1, file);
+        delete = u;
+        u = u -> next;
+        free(delete);
+    }
+    
+    fclose(file);
+    fprintf(stderr, MAGENTA("[LOG]")" Stored and freed registered user list\n");
+    return;
+}
+
+static void readUsers(char *fileName) {
+    FILE *file = fopen(fileName, "rb");
+    if (!file) {
+        perror(RED("[ERROR]")" Failed to open file to read registered users\n");
+        return;
+    }
+    
+    while (1) {
+        User *newUser = malloc(sizeof(User));
+        if (!newUser) {
+            perror(RED("[ERROR]")" malloc failed\n");
+            break;
+        }
+        
+        // Read ID
+        if (fread(newUser -> ID, sizeof(char), BUFFERSIZE, file) != BUFFERSIZE) {
+            break;
+        }
+        // Read password
+        fread(newUser -> password, sizeof(char), BUFFERSIZE, file);
+        // Read address
+        fread(&(newUser -> address), sizeof(struct sockaddr_in), 1, file);
+        
+        newUser -> next = NULL;
+        newUser -> prev = NULL;
+        
+        if (registeredUsers == NULL) {
+            registeredUsers = newUser;
+        } else {
+            newUser -> next = registeredUsers;
+            registeredUsers -> prev = newUser;
+            registeredUsers = newUser;
+        }
+    }
+    
+    fclose(file);
+    fprintf(stderr, MAGENTA("[LOG]")" Read registered user list from file\n");
+    return;
+}

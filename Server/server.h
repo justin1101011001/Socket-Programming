@@ -60,5 +60,7 @@ static User *checkUserInList(User **listHeadPtr, char *userID, pthread_mutex_t *
 static User *createAndInsertUserToList(bool mode, char *userID, char *password, struct sockaddr_in *clientListenAddress);
 static void *consoleWatcher(void *arg);
 static void cleanUp(void);
+static void saveUsers(char *fileName);
+static void readUsers(char *fileName);
 
 #endif /* server_h */
