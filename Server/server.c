@@ -101,7 +101,7 @@ static void handle_client(int perClientSocket) {
         if (strcmp(token, "logout") == 0) { // Client wants to disconnect
             fprintf(stderr, MAGENTA("[LOG]")" Start logout process\n");
             if (currentUser != NULL) {
-                removeFromLoggedIn(&currentUser); // Update logged in user list
+                removeFromList(LOGLIST, &currentUser); // Update logged in user list
                 fprintf(stderr, MAGENTA("[LOG]")"  | Removed user from logged-in list\n");
             }
             
@@ -148,6 +148,44 @@ static void handle_client(int perClientSocket) {
             }
             
             break;
+            //MARK: - Deregister
+        } else if (strcmp(token, "deregister") == 0) {
+            fprintf(stderr, MAGENTA("[LOG]")" Start deregister process\n");
+            char inputTokens[2][BUFFERSIZE] = {0}; // 1 password
+            parseMessage(token, inputTokens);
+            
+            fprintf(stderr, MAGENTA("[LOG]")"  | Checking password\n");
+            if (strcmp(inputTokens[1], currentUser -> password) != 0) { // Incorrect password
+                char sendBuffer[] = "Incorrect password, please try again\n";
+                sendMessage(perClientSocket, sendBuffer);
+                fprintf(stderr, MAGENTA("[LOG]")"  | Incorrect password\n");
+                fprintf(stderr, MAGENTA("[LOG]")"  +-Deregistration failed\n");
+                continue;
+            }
+            
+            fprintf(stderr, MAGENTA("[LOG]")"  | Password accepted, send confirmation\n");
+            char comfirmation[] = "You are about to deregister, type \"yes\" to confirm.\n";
+            sendMessage(perClientSocket, comfirmation);
+            readMessage(perClientSocket, recvBuffer);
+            
+            fprintf(stderr, MAGENTA("[LOG]")"  | Recieved confirmation: \"%s\"\n", recvBuffer);
+            if (strcmp(recvBuffer, "yes") == 0) { // Comfirmed to deregister
+                fprintf(stderr, MAGENTA("[LOG]")"  | Removing user from registered list\n");
+                removeFromList(REGLIST, &currentUser); // Remove user from registered list
+                fprintf(stderr, MAGENTA("[LOG]")"  | Successfully removed user from registered list\n");
+                char sendBuffer[] = "Successfully deregistered.\n";
+                sendMessage(perClientSocket, sendBuffer);
+                
+                close(perClientSocket);
+                fprintf(stderr, MAGENTA("[LOG]")"  | Connection to client %s:%d closed\n", ip_str, port);
+                fprintf(stderr, MAGENTA("[LOG]")"  +-Deregistration complete\n");
+                break;
+            } else { // Don't deregister
+                char sendBuffer[] = "Deregistration canceled.\n";
+                sendMessage(perClientSocket, sendBuffer);
+                fprintf(stderr, MAGENTA("[LOG]")"  +-Deregistration canceled\n");
+            }
+            
             //MARK: - Login
         } else if (strcmp(token, "login") == 0) {
             fprintf(stderr, MAGENTA("[LOG]")" Start login process\n");
@@ -201,7 +239,7 @@ static void handle_client(int perClientSocket) {
             
             // Create and insert user to logged in list
             fprintf(stderr, MAGENTA("[LOG]")"  | Inserting user to logged-in list\n");
-            currentUser = createAndInsertUserToList(LOGLIST, inputTokens[1], NULL, &clientListenAddress);
+            currentUser = createAndInsertUserToList(LOGLIST, inputTokens[1], inputTokens[2], &clientListenAddress);
             // Returns the newly created user entry
             
             char sendBuffer[] = "Successfully logged in.\n";
@@ -228,7 +266,7 @@ static void handle_client(int perClientSocket) {
             char sendBuffer[] = "Unknown command.\n";
             sendMessage(perClientSocket, sendBuffer);
         }
-    }
+    } // End of while loop
     
     return;
 }
@@ -453,8 +491,31 @@ static int acceptConnection(int perClientSocket, int serverSocket) {
     return perClientSocket;
 }
 
-static void removeFromLoggedIn(User **currentUserPtr) {
+static void removeFromList(bool mode, User **currentUserPtr) {
     User *currentUser = *currentUserPtr;
+    
+    if (mode == REGLIST) { // remove from registered list
+        User *registered = checkUserInList(&registeredUsers, currentUser -> ID, &registeredUsers_mutex); // Find user in registered list
+        if (registered == NULL) {
+            fprintf(stderr, RED("[ERROR]")" User not found in registered list\n");
+        } else {
+            pthread_mutex_lock(&registeredUsers_mutex);
+            if (registeredUsers == registered) {
+                registeredUsers = registered -> next;
+            }
+            if (registered -> prev != NULL) {
+                registered -> prev -> next = registered -> next;
+            }
+            if (registered -> next != NULL) {
+                registered -> next -> prev = registered -> prev;
+            }
+            pthread_mutex_unlock(&registeredUsers_mutex);
+            
+            free(registered);
+        }
+    }
+    
+    // Remove from logged in list
     pthread_mutex_lock(&loggedInUsers_mutex);
     if (loggedInUsers == currentUser) {
         loggedInUsers = currentUser -> next;
@@ -466,6 +527,7 @@ static void removeFromLoggedIn(User **currentUserPtr) {
         currentUser -> next -> prev = currentUser -> prev;
     }
     pthread_mutex_unlock(&loggedInUsers_mutex);
+    
     free(currentUser);
     *currentUserPtr = NULL;
     return;
@@ -504,6 +566,7 @@ static User *createAndInsertUserToList(bool mode, char *userID, char *password, 
         pthread_mutex_unlock(&registeredUsers_mutex);
     } else if (mode == LOGLIST) { // Insert to loggedInUsers
         strcpy(inserted -> ID, userID);
+        strcpy(inserted -> password, password);
         inserted -> address = *clientListenAddress;
         
         pthread_mutex_lock(&loggedInUsers_mutex);

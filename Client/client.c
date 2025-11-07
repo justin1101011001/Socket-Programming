@@ -74,6 +74,40 @@ int main(int argc, char const* argv[]) {
             } else {
                 printf("Invalid parameters.\nUsage: register <ID> <password>\n");
             }
+//MARK: - Deregister
+        } else if (strcmp(token, "deregister") == 0) {
+            char sendBuffer[BUFFERSIZE] = "";
+            int parameterIndex = parseInput(token, sendBuffer);
+            
+            if (!loggedIn) { // Can't deregister without logging in
+                printf("Please log in first to start the deregistration process.\n");
+                continue;
+            }
+            
+            if (parameterIndex == 2) {
+                sendMessage(clientSocket, sendBuffer); // Send deregistration request
+                readMessage(clientSocket, recvBuffer); // Read comfirmation message
+                printf("%s", recvBuffer);
+                
+                if (strncmp(recvBuffer, "You", 3) == 0) { // Password check passed
+                    // User input to confirm deregistration
+                    printf(BOLD("%s> "), promptText);
+                    fgets(inputBuffer, BUFFERSIZE, stdin); // read whole line of input
+                    inputBuffer[strcspn(inputBuffer, "\n")] = '\0'; // trim off the newline character at the end
+                    sendMessage(clientSocket, inputBuffer); // Send comfirmation
+                    readMessage(clientSocket, recvBuffer); // Server response
+                    
+                    if (strncmp(recvBuffer, "Success", 7) == 0) { // Deregistered successsfully
+                        close(clientSocket);
+                        promptText[0] = '\0';
+                        loggedIn = false;
+                    }
+
+                    printf("%s", recvBuffer);
+                }
+            } else {
+                printf("Invalid parameters.\nUsage: deregister <password>\n");
+            }
 //MARK: - Login
         } else if (strcmp(token, "login") == 0) {
             char sendBuffer[BUFFERSIZE] = "";
