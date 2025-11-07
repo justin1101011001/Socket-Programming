@@ -22,9 +22,8 @@
 // File path to store registered users
 char *registeredUserFile = "./Data/registeredUsers";
 
-// Mutexes for user lists
-pthread_mutex_t registeredUsers_mutex = PTHREAD_MUTEX_INITIALIZER;
-pthread_mutex_t loggedInUsers_mutex = PTHREAD_MUTEX_INITIALIZER;
+// Mutex for user list
+pthread_mutex_t userList_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // Global user lists
 User *registeredUsers = NULL;
@@ -92,19 +91,21 @@ static void handle_client(int perClientSocket) {
         fprintf(stderr, CYAN("[MESSAGE]")" Client %s:%d: %s\n", ip_str, port, recvBuffer);
         char *token; // Pointer to store each token
         token = strtok(recvBuffer, " ");
-        if (token == NULL) {
-            // Empty command, continue reading
+        if (token == NULL) { // Empty command, continue reading
             continue;
         }
         
         //MARK: - Logout
         if (strcmp(token, "logout") == 0) { // Client wants to disconnect
             fprintf(stderr, MAGENTA("[LOG]")" Start logout process\n");
-            if (currentUser != NULL) {
-                removeFromList(LOGLIST, &currentUser); // Update logged in user list
-                fprintf(stderr, MAGENTA("[LOG]")"  | Removed user from logged-in list\n");
+            if (currentUser == NULL) { // No assigned current user
+                fprintf(stderr, RED("[ERROR]")"| No currently logged in user\n");
+                close(perClientSocket);
+                break;
             }
             
+            removeFromList(LOGLIST, &currentUser); // Update logged in user list
+            fprintf(stderr, MAGENTA("[LOG]")"  | Removed user from logged-in list\n");
             char sendBuffer[] = "Successfully logged out.\n";
             sendMessage(perClientSocket, sendBuffer);
             
@@ -120,16 +121,15 @@ static void handle_client(int perClientSocket) {
             
             // Check if user ID is already taken
             fprintf(stderr, MAGENTA("[LOG]")"  | Checking if user exists\n");
-            User *userExists = checkUserInList(&registeredUsers, inputTokens[1], &registeredUsers_mutex);
             // Returns NULL if the user doesn't exist yet, otherwise return the pointer to the user
+            User *userExists = checkUserInList(REGLIST, inputTokens[1]);
             
             if (!userExists) { // If not, create and insert new user to linked list
                 fprintf(stderr, MAGENTA("[LOG]")"  | User doesn't exit\n");
                 fprintf(stderr, MAGENTA("[LOG]")"  | Insert new user to registered list\n");
-                createAndInsertUserToList(REGLIST, inputTokens[1], inputTokens[2], NULL);
-            }
-            
-            if (!userExists) {
+                if (insertUserToList(REGLIST, inputTokens[1], inputTokens[2], NULL, NULL) == NULL) {
+                    fprintf(stderr, RED("[ERROR]")"| Failed to insert user\n");
+                }
                 char sendBuffer[] = "Registration complete, please login to start using the service.\n";
                 sendMessage(perClientSocket, sendBuffer);
             } else {
@@ -194,8 +194,8 @@ static void handle_client(int perClientSocket) {
             
             // Check if user is already registered
             fprintf(stderr, MAGENTA("[LOG]")"  | Checking if user is registered\n");
-            User *userRegistered = checkUserInList(&registeredUsers, inputTokens[1], &registeredUsers_mutex);
             // Returns NULL if the user doesn't exist yet, otherwise return the pointer to the user
+            User *userRegistered = checkUserInList(REGLIST, inputTokens[1]);
             
             // User not registered
             if (!userRegistered) {
@@ -239,8 +239,18 @@ static void handle_client(int perClientSocket) {
             
             // Create and insert user to logged in list
             fprintf(stderr, MAGENTA("[LOG]")"  | Inserting user to logged-in list\n");
-            currentUser = createAndInsertUserToList(LOGLIST, inputTokens[1], inputTokens[2], &clientListenAddress);
             // Returns the newly created user entry
+            currentUser = insertUserToList(LOGLIST, NULL, NULL, &clientListenAddress, &userRegistered);
+            if (currentUser == NULL) { // Fail to insert
+                fprintf(stderr, RED("[ERROR]")"| Failed to insert user\n");
+                char sendBuffer[] = "Error logging in.\n";
+                sendMessage(perClientSocket, sendBuffer);
+                
+                close(perClientSocket);
+                fprintf(stderr, MAGENTA("[LOG]")"  | Connection to client %s:%d closed\n", ip_str, port);
+                fprintf(stderr, MAGENTA("[LOG]")"  +-Login failed\n");
+                break;
+            }
             
             char sendBuffer[] = "Successfully logged in.\n";
             sendMessage(perClientSocket, sendBuffer);
@@ -250,13 +260,13 @@ static void handle_client(int perClientSocket) {
             fprintf(stderr, MAGENTA("[LOG]")" Start list process\n");
             
             // Send the logged in list to client
-            pthread_mutex_lock(&loggedInUsers_mutex);
+            pthread_mutex_lock(&userList_mutex);
             User *u = loggedInUsers;
             while (u != NULL) {
                 sendMessage(perClientSocket, u -> ID);
-                u = u -> next;
+                u = u -> logNext;
             }
-            pthread_mutex_unlock(&loggedInUsers_mutex);
+            pthread_mutex_unlock(&userList_mutex);
             
             char sendBuffer[] = "END OF USER LIST";
             sendMessage(perClientSocket, sendBuffer);
@@ -322,11 +332,9 @@ static void* worker_thread(void* arg) {
     (void)arg;
     while (1) {
         int clientSock = queue_pop(&job_queue);
-        
         if (clientSock < 0) { // Shutdown
             break;
         }
-        
         handle_client(clientSock);
     }
     return NULL;
@@ -372,18 +380,8 @@ static void cleanUp(void) {
     pthread_cond_destroy(&job_queue.cond_nonfull);
     
     // Destroy user list mutexes
-    pthread_mutex_destroy(&registeredUsers_mutex);
-    pthread_mutex_destroy(&loggedInUsers_mutex);
-    fprintf(stderr, MAGENTA("[LOG]")" Destroyed mutexes\n");
-    
-    // Free logged in user list
-    User *u;
-    while (loggedInUsers != NULL) {
-        u = loggedInUsers;
-        loggedInUsers = loggedInUsers -> next;
-        free(u);
-    }
-    fprintf(stderr, MAGENTA("[LOG]")" Freed logged in user list\n");
+    pthread_mutex_destroy(&userList_mutex);
+    fprintf(stderr, MAGENTA("[LOG]")" Destroyed mutex\n");
 }
 
 //MARK: - Set Socket
@@ -494,90 +492,111 @@ static int acceptConnection(int perClientSocket, int serverSocket) {
 static void removeFromList(bool mode, User **currentUserPtr) {
     User *currentUser = *currentUserPtr;
     
-    if (mode == REGLIST) { // remove from registered list
-        User *registered = checkUserInList(&registeredUsers, currentUser -> ID, &registeredUsers_mutex); // Find user in registered list
-        if (registered == NULL) {
-            fprintf(stderr, RED("[ERROR]")" User not found in registered list\n");
-        } else {
-            pthread_mutex_lock(&registeredUsers_mutex);
-            if (registeredUsers == registered) {
-                registeredUsers = registered -> next;
-            }
-            if (registered -> prev != NULL) {
-                registered -> prev -> next = registered -> next;
-            }
-            if (registered -> next != NULL) {
-                registered -> next -> prev = registered -> prev;
-            }
-            pthread_mutex_unlock(&registeredUsers_mutex);
-            
-            free(registered);
+    if (mode == REGLIST) { // Deregister
+        // remove from registered list
+        pthread_mutex_lock(&userList_mutex);
+        if (registeredUsers == currentUser) {
+            registeredUsers = currentUser -> regNext;
         }
+        if (currentUser -> regPrev != NULL) {
+            currentUser -> regPrev -> regNext = currentUser -> regNext;
+        }
+        if (currentUser -> regNext != NULL) {
+            currentUser -> regNext -> regPrev = currentUser -> regPrev;
+        }
+        
+        // Remove from logged in list
+        if (loggedInUsers == currentUser) {
+            loggedInUsers = currentUser -> logNext;
+        }
+        if (currentUser -> logPrev != NULL) {
+            currentUser -> logPrev -> logNext = currentUser -> logNext;
+        }
+        if (currentUser -> logNext != NULL) {
+            currentUser -> logNext -> logPrev = currentUser -> logPrev;
+        }
+        pthread_mutex_unlock(&userList_mutex);
+        
+        free(currentUser);
+    } else if (mode == LOGLIST) { // Logout only
+        // Remove from logged in list
+        pthread_mutex_lock(&userList_mutex);
+        if (loggedInUsers == currentUser) {
+            loggedInUsers = currentUser -> logNext;
+        }
+        if (currentUser -> logPrev != NULL) {
+            currentUser -> logPrev -> logNext = currentUser -> logNext;
+        }
+        if (currentUser -> logNext != NULL) {
+            currentUser -> logNext -> logPrev = currentUser -> logPrev;
+        }
+        pthread_mutex_unlock(&userList_mutex);
     }
     
-    // Remove from logged in list
-    pthread_mutex_lock(&loggedInUsers_mutex);
-    if (loggedInUsers == currentUser) {
-        loggedInUsers = currentUser -> next;
-    }
-    if (currentUser -> prev != NULL) {
-        currentUser -> prev -> next = currentUser -> next;
-    }
-    if (currentUser -> next != NULL) {
-        currentUser -> next -> prev = currentUser -> prev;
-    }
-    pthread_mutex_unlock(&loggedInUsers_mutex);
-    
-    free(currentUser);
     *currentUserPtr = NULL;
     return;
 }
 
-static User *checkUserInList(User **listHeadPtr, char *userID, pthread_mutex_t *lock) {
-    pthread_mutex_lock(lock);
-    User *u = *listHeadPtr;
-    while (u != NULL) {
-        if (strcmp(u -> ID, userID) == 0) {
-            break;
+static User *checkUserInList(bool mode, char *userID) {
+    User *u = NULL;
+    if (mode == REGLIST) {
+        pthread_mutex_lock(&userList_mutex);
+        u = registeredUsers;
+        while (u != NULL) {
+            if (strcmp(u -> ID, userID) == 0) {
+                break;
+            }
+            u = u -> regNext;
         }
-        u = u -> next;
+        pthread_mutex_unlock(&userList_mutex);
+    } else if (mode == LOGLIST) {
+        pthread_mutex_lock(&userList_mutex);
+        u = loggedInUsers;
+        while (u != NULL) {
+            if (strcmp(u -> ID, userID) == 0) {
+                break;
+            }
+            u = u -> logNext;
+        }
+        pthread_mutex_unlock(&userList_mutex);
     }
-    pthread_mutex_unlock(lock);
+    
     return u;
 }
 
-static User *createAndInsertUserToList(bool mode, char *userID, char *password, struct sockaddr_in *clientListenAddress) {
-    User *inserted = (User *)calloc(1, sizeof(User));
-    inserted -> next = NULL;
-    inserted -> prev = NULL;
-    
+static User *insertUserToList(bool mode, char *userID, char *password, struct sockaddr_in *clientListenAddress, User **loginUser) {
+    User *inserted = NULL;
     if (mode == REGLIST) { // Insert to registeredUsers
+        inserted = (User *)calloc(1, sizeof(User));
+        inserted -> regNext = NULL;
+        inserted -> regPrev = NULL;
+        inserted -> logNext = NULL;
+        inserted -> logPrev = NULL;
         strcpy(inserted -> ID, userID);
         strcpy(inserted -> password, password);
         
-        pthread_mutex_lock(&registeredUsers_mutex);
+        pthread_mutex_lock(&userList_mutex);
         if (registeredUsers == NULL) {
             registeredUsers = inserted;
         } else {
-            registeredUsers -> prev = inserted;
-            inserted -> next = registeredUsers;
+            registeredUsers -> regPrev = inserted;
+            inserted -> regNext = registeredUsers;
             registeredUsers = inserted;
         }
-        pthread_mutex_unlock(&registeredUsers_mutex);
+        pthread_mutex_unlock(&userList_mutex);
     } else if (mode == LOGLIST) { // Insert to loggedInUsers
-        strcpy(inserted -> ID, userID);
-        strcpy(inserted -> password, password);
-        inserted -> address = *clientListenAddress;
+        inserted = *loginUser;
         
-        pthread_mutex_lock(&loggedInUsers_mutex);
+        pthread_mutex_lock(&userList_mutex);
+        inserted -> address = *clientListenAddress;
         if (loggedInUsers == NULL) { // insert to list
             loggedInUsers = inserted;
         } else {
-            inserted -> next = loggedInUsers;
-            loggedInUsers -> prev = inserted;
+            inserted -> logNext = loggedInUsers;
+            loggedInUsers -> logPrev = inserted;
             loggedInUsers = inserted;
         }
-        pthread_mutex_unlock(&loggedInUsers_mutex);
+        pthread_mutex_unlock(&userList_mutex);
     }
     
     return inserted;
@@ -595,9 +614,8 @@ static void saveUsers(char *fileName) {
         // Write the ID, password, and sockaddr_in
         fwrite(u -> ID, sizeof(char), BUFFERSIZE, file);
         fwrite(u -> password, sizeof(char), BUFFERSIZE, file);
-        fwrite(&(u -> address), sizeof(struct sockaddr_in), 1, file);
         delete = u;
-        u = u -> next;
+        u = u -> regNext;
         free(delete);
     }
     
@@ -626,17 +644,17 @@ static void readUsers(char *fileName) {
         }
         // Read password
         fread(newUser -> password, sizeof(char), BUFFERSIZE, file);
-        // Read address
-        fread(&(newUser -> address), sizeof(struct sockaddr_in), 1, file);
         
-        newUser -> next = NULL;
-        newUser -> prev = NULL;
+        newUser -> regNext = NULL;
+        newUser -> regPrev = NULL;
+        newUser -> logNext = NULL;
+        newUser -> logPrev = NULL;
         
         if (registeredUsers == NULL) {
             registeredUsers = newUser;
         } else {
-            newUser -> next = registeredUsers;
-            registeredUsers -> prev = newUser;
+            newUser -> regNext = registeredUsers;
+            registeredUsers -> regPrev = newUser;
             registeredUsers = newUser;
         }
     }

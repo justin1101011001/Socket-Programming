@@ -66,6 +66,7 @@ int main(int argc, char const* argv[]) {
                     printf("You are already logged in to an account, please logout before creating a new account.\n");
                 } else {
                     clientSocket = connectToServer(clientSocket);
+                    if (clientSocket < 0) continue;
                     sendMessage(clientSocket, sendBuffer);
                     readMessage(clientSocket, recvBuffer);
                     close(clientSocket);
@@ -118,6 +119,7 @@ int main(int argc, char const* argv[]) {
                     printf("You are already logged in to an account, please logout before logging in to another account.\n");
                 } else {
                     clientSocket = connectToServer(clientSocket);
+                    if (clientSocket < 0) continue;
                     sendMessage(clientSocket, sendBuffer);
                     readMessage(clientSocket, recvBuffer);
                     
@@ -155,6 +157,7 @@ int main(int argc, char const* argv[]) {
 //MARK: - Help
         } else if (strcmp(token, "help") == 0) {
             printf(YELLOW("%-36s")": %-25s\n", "Registration", "register <ID> <password>");
+            printf(YELLOW("%-36s")": %-25s\n", "Deregistration(must be logged in)", "deregister <ID> <password>");
             printf(YELLOW("%-36s")": %-25s\n", "Login(must be registered)", "login <ID> <password>");
             printf(YELLOW("%-36s")": %-25s\n", "Logout(must be logged in)", "logout");
             printf(YELLOW("%-36s")": %-25s\n", "List Online Users(must be logged in)", "list");
@@ -191,7 +194,8 @@ static int connectToServer(int clientSocket) {
     int status;
     if ((status = connect(clientSocket, (struct sockaddr*)&serverAddress, addrlen)) < 0) {
         perror(RED("Connection to server failed\n"));
-        exit(EXIT_FAILURE);
+        //exit(EXIT_FAILURE);
+        clientSocket = -1;
     }
     
     return clientSocket;

@@ -31,8 +31,10 @@ typedef struct userClient {
     char ID[BUFFERSIZE];
     char password[BUFFERSIZE];
     struct sockaddr_in address;
-    struct userClient *next;
-    struct userClient *prev;
+    struct userClient *regNext;
+    struct userClient *regPrev;
+    struct userClient *logNext;
+    struct userClient *logPrev;
 } User;
 
 // Job queue for client socket descriptors
@@ -56,8 +58,8 @@ static void readMessage(int socket, char *buffer);
 static void parseMessage(char *token, char (*input)[BUFFERSIZE]);
 static int acceptConnection(int socket, int serverSocket);
 static void removeFromList(bool mode, User **currentUserPtr);
-static User *checkUserInList(User **listHeadPtr, char *userID, pthread_mutex_t *lock);
-static User *createAndInsertUserToList(bool mode, char *userID, char *password, struct sockaddr_in *clientListenAddress);
+static User *checkUserInList(bool mode, char *userID);
+static User *insertUserToList(bool mode, char *userID, char *password, struct sockaddr_in *clientListenAddress, User **loginUser);
 static void *consoleWatcher(void *arg);
 static void cleanUp(void);
 static void saveUsers(char *fileName);
