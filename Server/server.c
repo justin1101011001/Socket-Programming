@@ -39,8 +39,8 @@ static int serverSocketGlobal = -1; // store listening socket globally
 static pthread_t workerThreads[THREAD_POOL_SIZE];
 static pthread_t consoleThread;
 
+//MARK: - main
 int main(int argc, char const* argv[]) {
-    //MARK: - main
     int serverSocket = 0, perClientSocket = 0; // Socket used for listening and socket created for each client
     
     queue_init(&job_queue); // Initialize job queue
@@ -95,7 +95,7 @@ static void handle_client(int perClientSocket) {
             continue;
         }
         
-        //MARK: - Logout
+//MARK: - Logout
         if (strcmp(token, "logout") == 0) { // Client wants to disconnect
             fprintf(stderr, MAGENTA("[LOG]")" Start logout process\n");
             if (currentUser == NULL) { // No assigned current user
@@ -113,7 +113,8 @@ static void handle_client(int perClientSocket) {
             fprintf(stderr, MAGENTA("[LOG]")"  | Connection to client %s:%d closed\n", ip_str, port);
             fprintf(stderr, MAGENTA("[LOG]")"  +-Logout process complete\n");
             break;
-            //MARK: - Register
+            
+//MARK: - Register
         } else if (strcmp(token, "register") == 0) {
             fprintf(stderr, MAGENTA("[LOG]")" Start register process\n");
             char inputTokens[3][BUFFERSIZE] = {0}; // 1 = ID, 2 = password
@@ -148,7 +149,8 @@ static void handle_client(int perClientSocket) {
             }
             
             break;
-            //MARK: - Deregister
+            
+//MARK: - Deregister
         } else if (strcmp(token, "deregister") == 0) {
             fprintf(stderr, MAGENTA("[LOG]")" Start deregister process\n");
             char inputTokens[2][BUFFERSIZE] = {0}; // 1 password
@@ -186,7 +188,7 @@ static void handle_client(int perClientSocket) {
                 fprintf(stderr, MAGENTA("[LOG]")"  +-Deregistration canceled\n");
             }
             
-            //MARK: - Login
+//MARK: - Login
         } else if (strcmp(token, "login") == 0) {
             fprintf(stderr, MAGENTA("[LOG]")" Start login process\n");
             char inputTokens[3][BUFFERSIZE] = {0}; // 1 = ID, 2 = password
@@ -235,9 +237,7 @@ static void handle_client(int perClientSocket) {
             struct sockaddr_in clientListenAddress = client_address;
             clientListenAddress.sin_port = clientListenPort;
             
-            sendMessage(perClientSocket, inputTokens[1]); // Send back user ID
-            
-            // Create and insert user to logged in list
+            // Insert user to logged in list
             fprintf(stderr, MAGENTA("[LOG]")"  | Inserting user to logged-in list\n");
             // Returns the newly created user entry
             currentUser = insertUserToList(LOGLIST, NULL, NULL, &clientListenAddress, &userRegistered);
@@ -255,7 +255,8 @@ static void handle_client(int perClientSocket) {
             char sendBuffer[] = "Successfully logged in.\n";
             sendMessage(perClientSocket, sendBuffer);
             fprintf(stderr, MAGENTA("[LOG]")"  +-Login process complete\n");
-            //MARK: - List
+            
+//MARK: - List
         } else if (strcmp(token, "list") == 0) {
             fprintf(stderr, MAGENTA("[LOG]")" Start list process\n");
             
@@ -272,6 +273,26 @@ static void handle_client(int perClientSocket) {
             sendMessage(perClientSocket, sendBuffer);
             fprintf(stderr, MAGENTA("[LOG]")"  | Sent user list to client\n");
             fprintf(stderr, MAGENTA("[LOG]")"  +-List process complete\n");
+           
+//MARK: - DM
+        } else if (strcmp(token, "chat") == 0) {
+            fprintf(stderr, MAGENTA("[LOG]")" Start chat process\n");
+            char inputTokens[2][BUFFERSIZE] = {0}; // 1 = peer ID
+            parseMessage(token, inputTokens);
+            
+            User *target = checkUserInList(LOGLIST, inputTokens[1]); // Retrieve target user
+            if (target == NULL) { // Target not online
+                char sendBuffer[] = "Peer currently offline.\n";
+                sendMessage(perClientSocket, sendBuffer);
+                continue;
+            }
+            
+            char sendBuffer[] = "OK.";
+            sendMessage(perClientSocket, sendBuffer);
+            send(perClientSocket, &(target -> address.sin_addr.s_addr), sizeof(in_addr_t), 0); // Send IP address
+            send(perClientSocket, &(target -> address.sin_port), sizeof(in_port_t), 0); // Send port number
+            
+            // close connection???
         } else { // Unknown command
             char sendBuffer[] = "Unknown command.\n";
             sendMessage(perClientSocket, sendBuffer);
@@ -462,7 +483,9 @@ static void readMessage(int socket, char *buffer) {
 static void parseMessage(char *token, char (*input)[BUFFERSIZE]) {
     int parameterIndex = 0;
     while (token != NULL) {
-        strcpy(input[parameterIndex], token);
+        if (input != NULL) {
+            strcpy(input[parameterIndex], token);
+        }
         token = strtok(NULL, " ");
         parameterIndex++;
     } // tokenize input

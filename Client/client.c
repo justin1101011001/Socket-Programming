@@ -2,6 +2,7 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <stdbool.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -13,6 +14,19 @@
 #define SERVERPORT 12014
 #define BUFFERSIZE 1024
 
+static pthread_t messageReciever;
+static pthread_t DMAcceptor;
+
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t readyToAccept = PTHREAD_COND_INITIALIZER;
+bool ready = 0; // Flag indicating ready for next incoming messaging request
+bool DMOngoing = false; // Flag indicating if there's an ongoing DM session
+
+char currentUserID[100] = "";
+char currentPeerID[100] = "";
+
+int peerSocket; // Used for DM
+
 int main(int argc, char const* argv[]) {
 //MARK: - Socket Setup
     int listeningPort = setListeingPort(argc, argv); // Get listening port from arguments
@@ -21,11 +35,15 @@ int main(int argc, char const* argv[]) {
 
     char recvBuffer[BUFFERSIZE] = {0}; // buffer for messages from server
     char inputBuffer[BUFFERSIZE] = {0}; // buffer for user input
-    char promptText[100] = "";
     bool loggedIn = false; // is the user currently logged in
     
+    if (pthread_create(&DMAcceptor, NULL, acceptDM, &listeningSocket) != 0) {
+        perror(RED("[ERROR]")" Failed to create DM acceptor thread\n");
+        exit(EXIT_FAILURE);
+    }
+    
     while (true) {
-        printf(BOLD("%s> "), promptText);
+        printf(BOLD("%s> "), currentUserID);
         fgets(inputBuffer, BUFFERSIZE, stdin); // read whole line of input
         inputBuffer[strcspn(inputBuffer, "\n")] = '\0'; // trim off the newline character at the end
         char *token; // Pointer to store each token
@@ -43,47 +61,51 @@ int main(int argc, char const* argv[]) {
                 printf("%s", recvBuffer);
             }
             break;
+            
 //MARK: - Logout
         } else if (strcmp(token, "logout") == 0) { // logout put keeps the client process running
             if (!loggedIn) {
                 printf("You are currently not logged in to any account.\n");
-            } else {
-                sendMessage(clientSocket, token);
-                readMessage(clientSocket, recvBuffer);
-                close(clientSocket);
-                
-                promptText[0] = '\0';
-                loggedIn = false;
-                printf("%s", recvBuffer);
+                continue;
             }
+            
+            sendMessage(clientSocket, token);
+            readMessage(clientSocket, recvBuffer);
+            close(clientSocket);
+            currentUserID[0] = '\0';
+            loggedIn = false;
+            printf("%s", recvBuffer);
+            
 //MARK: - Register
         } else if (strcmp(token, "register") == 0) {
             char sendBuffer[BUFFERSIZE] = "";
-            int parameterIndex = parseInput(token, sendBuffer);
+            int parameterIndex = parseInput(token, sendBuffer, NULL);
             
             if (parameterIndex == 3) { // correct number of parameters
                 if (loggedIn) {
                     printf("You are already logged in to an account, please logout before creating a new account.\n");
-                } else {
-                    clientSocket = connectToServer(clientSocket);
-                    if (clientSocket < 0) continue;
-                    sendMessage(clientSocket, sendBuffer);
-                    readMessage(clientSocket, recvBuffer);
-                    close(clientSocket);
-                    printf("%s", recvBuffer);
+                    continue;
                 }
+                
+                clientSocket = connectToServer(clientSocket);
+                if (clientSocket < 0) continue;
+                sendMessage(clientSocket, sendBuffer);
+                readMessage(clientSocket, recvBuffer);
+                close(clientSocket);
+                printf("%s", recvBuffer);
             } else {
                 printf("Invalid parameters.\nUsage: register <ID> <password>\n");
             }
+            
 //MARK: - Deregister
         } else if (strcmp(token, "deregister") == 0) {
-            char sendBuffer[BUFFERSIZE] = "";
-            int parameterIndex = parseInput(token, sendBuffer);
-            
             if (!loggedIn) { // Can't deregister without logging in
                 printf("Please log in first to start the deregistration process.\n");
                 continue;
             }
+            
+            char sendBuffer[BUFFERSIZE] = "";
+            int parameterIndex = parseInput(token, sendBuffer, NULL);
             
             if (parameterIndex == 2) {
                 sendMessage(clientSocket, sendBuffer); // Send deregistration request
@@ -92,7 +114,7 @@ int main(int argc, char const* argv[]) {
                 
                 if (strncmp(recvBuffer, "You", 3) == 0) { // Password check passed
                     // User input to confirm deregistration
-                    printf(BOLD("%s> "), promptText);
+                    printf(BOLD("%s> "), currentUserID);
                     fgets(inputBuffer, BUFFERSIZE, stdin); // read whole line of input
                     inputBuffer[strcspn(inputBuffer, "\n")] = '\0'; // trim off the newline character at the end
                     sendMessage(clientSocket, inputBuffer); // Send comfirmation
@@ -100,7 +122,7 @@ int main(int argc, char const* argv[]) {
                     
                     if (strncmp(recvBuffer, "Success", 7) == 0) { // Deregistered successsfully
                         close(clientSocket);
-                        promptText[0] = '\0';
+                        currentUserID[0] = '\0';
                         loggedIn = false;
                     }
 
@@ -109,51 +131,160 @@ int main(int argc, char const* argv[]) {
             } else {
                 printf("Invalid parameters.\nUsage: deregister <password>\n");
             }
+            
 //MARK: - Login
         } else if (strcmp(token, "login") == 0) {
             char sendBuffer[BUFFERSIZE] = "";
-            int parameterIndex = parseInput(token, sendBuffer);
+            char inputTokens[3][BUFFERSIZE] = {0}; // 1 ID, 2 password
+            int parameterIndex = parseInput(token, sendBuffer, inputTokens);
             
             if (parameterIndex == 3) { // correct number of parameters
                 if (loggedIn) {
                     printf("You are already logged in to an account, please logout before logging in to another account.\n");
-                } else {
-                    clientSocket = connectToServer(clientSocket);
-                    if (clientSocket < 0) continue;
-                    sendMessage(clientSocket, sendBuffer);
-                    readMessage(clientSocket, recvBuffer);
-                    
-                    if (strncmp(recvBuffer, "OK.", 3) == 0) { // if successfully logged in
-                        int32_t formatted = htons(listeningPort);
-                        send(clientSocket, &formatted, sizeof(int32_t), 0);
-                        loggedIn = true;
- 
-                        readMessage(clientSocket, recvBuffer);
-                        strcpy(promptText, recvBuffer);
-                        strcat(promptText, " ");
-                        
-                        readMessage(clientSocket, recvBuffer);
-                    }
-                    
-                    printf("%s", recvBuffer);
+                    continue;
                 }
+                
+                clientSocket = connectToServer(clientSocket);
+                if (clientSocket < 0) continue;
+                sendMessage(clientSocket, sendBuffer);
+                readMessage(clientSocket, recvBuffer);
+                
+                if (strncmp(recvBuffer, "OK.", 3) == 0) { // if successfully logged in
+                    int32_t formatted = htons(listeningPort);
+                    send(clientSocket, &formatted, sizeof(int32_t), 0);
+                    loggedIn = true;
+                    
+                    strcpy(currentUserID, inputTokens[1]); // Add logged in user name to prompt
+                    readMessage(clientSocket, recvBuffer);
+                }
+                
+                printf("%s", recvBuffer);
             } else {
                 printf("Invalid parameters.\nUsage: login <ID> <password>\n");
             }
+            
 //MARK: - List
         } else if (strcmp(token, "list") == 0) {
             if (!loggedIn) {
                 printf("You are currently not logged in, plaese login to use this feature.\n");
-            } else {
-                sendMessage(clientSocket, token);
+                continue;
+            }
+            
+            sendMessage(clientSocket, token);
+            readMessage(clientSocket, recvBuffer);
+            printf(GREEN("Online Users\n====================\n"));
+            while (strcmp(recvBuffer, "END OF USER LIST") != 0) {
+                printf(GREEN("%s\n"), recvBuffer);
                 readMessage(clientSocket, recvBuffer);
+            }
+            
+//MARK: - DM
+        } else if (strcmp(token, "chat") == 0) {
+            char sendBuffer[BUFFERSIZE] = "";
+            char inputTokens[2][BUFFERSIZE] = {0}; // 1 peerID
+            int parameterIndex = parseInput(token, sendBuffer, inputTokens);
+            
+            if (parameterIndex == 2) { // correct number of parameters
+                if (!loggedIn) {
+                    printf("You are currently not logged in, plaese login to use this feature.\n");
+                    continue;
+                }
+                if (strcmp(inputTokens[1], currentUserID) == 0) { // Don't allow messaging oneself
+                    printf("???\n");
+                    continue;
+                }
+                if (DMOngoing) {
+                    printf(RED("Cannot have more than one ongoing chat at once.\n"));
+                    continue;
+                }
                 
-                printf(GREEN("Online Users\n====================\n"));
-                while (strcmp(recvBuffer, "END OF USER LIST") != 0) {
-                    printf(GREEN("%s\n"), recvBuffer);
-                    readMessage(clientSocket, recvBuffer);
+                // Get peer address
+                sendMessage(clientSocket, sendBuffer);
+                readMessage(clientSocket, recvBuffer);
+                if (strncmp(recvBuffer, "Peer", 4) == 0) { // Peer offline
+                    printf("%s", recvBuffer);
+                    continue;
+                }
+                
+                struct sockaddr_in peerAddress;
+                socklen_t addrlen = sizeof(peerAddress); // length of address
+                peerAddress.sin_family = AF_INET; // address family is IPv4
+                read(clientSocket, &(peerAddress.sin_addr.s_addr), sizeof(in_addr_t));
+                read(clientSocket, &(peerAddress.sin_port), sizeof(in_port_t));
+
+                if ((peerSocket = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+                    perror(RED("[ERROR]")" Socket creation failed\n");
+                    exit(EXIT_FAILURE);
+                }
+                
+                // Connect to peer
+                if (connect(peerSocket, (struct sockaddr*)&peerAddress, addrlen) < 0) {
+                    printf(RED("Peer offline :(\n"));
+                    peerSocket = -1;
+                    continue;
+                }
+                
+                DMOngoing = true;
+                strcpy(currentPeerID, inputTokens[1]);
+                oneToOneChat();
+                close(peerSocket);
+                DMOngoing = false;
+                
+            } else {
+                printf("Invalid parameters.\nUsage: chat <ID>\n");
+            }
+            
+//MARK: - Accept DM
+        } else if (strcmp(token, "accept") == 0){
+            if (DMOngoing) {
+                printf(RED("Cannot have more than one ongoing chat at once\n"));
+                continue;
+            }
+            if (peerSocket < 0) {
+                printf(YELLOW("No incoming message request now\n"));
+                continue;
+            }
+            
+            DMOngoing = true;
+            char inputBuffer[BUFFERSIZE] = {0}; // buffer for user input
+            
+            // Create message reciever thread for chat
+            if (pthread_create(&messageReciever, NULL, recvMessage, currentPeerID) != 0) {
+                perror(RED("[ERROR]")" Failed to create message reciever thread\n");
+                exit(EXIT_FAILURE);
+            }
+            char response[] = "yes";
+            sendMessage(peerSocket, response);
+            
+            printf("Type \"leave chat\" to leave the current chat\n");
+            // Keep reading user input and send them
+            while (true) {
+                printf(BRED(BOLD("%s>"))RED(" \n"), currentUserID);
+                fgets(inputBuffer, BUFFERSIZE, stdin); // read whole line of input
+                inputBuffer[strcspn(inputBuffer, "\n")] = '\0'; // trim off the newline character at the end
+                if (strcmp(inputBuffer, "leave chat") == 0) {
+                    break;
+                }
+                if (sendMessage(peerSocket, inputBuffer) < 0) {
+                    break;
                 }
             }
+            char closeConnection[] = "CLOSEDM";
+            sendMessage(peerSocket, closeConnection);
+            
+            // Cancel the message recieving thread
+            pthread_cancel(messageReciever);
+            pthread_join(messageReciever, NULL);
+            close(peerSocket);
+            DMOngoing = false;
+            peerSocket = -1;
+            currentPeerID[0] = '\0';
+            
+            pthread_mutex_lock(&mutex);
+            ready = 1;
+            pthread_cond_signal(&readyToAccept); // notify acceptDM thread ready to accpet next incoming request
+            pthread_mutex_unlock(&mutex);
+            
 //MARK: - Help
         } else if (strcmp(token, "help") == 0) {
             printf(YELLOW("%-36s")": %-25s\n", "Registration", "register <ID> <password>");
@@ -161,13 +292,113 @@ int main(int argc, char const* argv[]) {
             printf(YELLOW("%-36s")": %-25s\n", "Login(must be registered)", "login <ID> <password>");
             printf(YELLOW("%-36s")": %-25s\n", "Logout(must be logged in)", "logout");
             printf(YELLOW("%-36s")": %-25s\n", "List Online Users(must be logged in)", "list");
+            printf(YELLOW("%-36s")": %-25s\n", "Chat with user(must be logged in)", "chat <ID>");
             printf(YELLOW("%-36s")": %-25s\n", "Exit Client Program", "exit");
         } else {
             printf("Unknown command, type \"help\" for usage.\n");
         }
     }
     
+    pthread_cancel(DMAcceptor);
+    pthread_join(DMAcceptor, NULL);
+    
     return 0;
+}
+
+static void *acceptDM(void *arg) {
+    int listeningSocket = *(int *)arg;
+    struct sockaddr_in address; // IP and port number to bind the socket to
+    socklen_t addrlen = sizeof(address); // length of address
+    
+    while (true) {
+        if ((peerSocket = accept(listeningSocket, (struct sockaddr*)&address, &addrlen)) < 0) {
+            fprintf(stderr, RED("[ERROR]")" Accepting connection failed\n");
+            continue;
+        }
+        readMessage(peerSocket, currentPeerID);
+        printf("\n[INCOMING] %s wants to chat, accept? [accept]\n", currentPeerID);
+        printf(BOLD("%s> "), currentUserID);
+        fflush(stdout);
+        
+        sleep(30); // Time out pending request
+        if (!DMOngoing) {
+            char response[] = "no";
+            sendMessage(peerSocket, response);
+            close(peerSocket);
+            peerSocket = -1;
+            currentPeerID[0] = '\0';
+            pthread_mutex_lock(&mutex);
+            ready = 1;
+            pthread_cond_signal(&readyToAccept);
+            pthread_mutex_unlock(&mutex);
+        }
+        
+        pthread_mutex_lock(&mutex);
+        while (!ready) {
+            pthread_cond_wait(&readyToAccept, &mutex); // wait until ready = 1
+        }
+        ready = 0; // reset flag for next iteration
+        pthread_mutex_unlock(&mutex);
+    }
+    
+    return NULL;
+}
+
+static void oneToOneChat(void) {
+    char response[3];
+    sendMessage(peerSocket, currentUserID); // Send messaging request
+    readMessage(peerSocket, response);
+    
+    if (strcmp(response, "no") == 0) {
+        printf(YELLOW("Peer did not accept DM request :(\n"));
+    } else {
+        char inputBuffer[BUFFERSIZE] = {0}; // buffer for user input
+        
+        // Create message reciever thread for chat
+        if (pthread_create(&messageReciever, NULL, recvMessage, NULL) != 0) {
+            perror(RED("[ERROR]")" Failed to create message reciever thread\n");
+            exit(EXIT_FAILURE);
+        }
+        printf("Type \"leave chat\" to leave the current chat\n");
+        // Keep reading user input and send them
+        while (true) {
+            printf(BRED(BOLD("%s>"))RED(" \n"), currentUserID);
+            fgets(inputBuffer, BUFFERSIZE, stdin); // read whole line of input
+            inputBuffer[strcspn(inputBuffer, "\n")] = '\0'; // trim off the newline character at the end
+            if (strcmp(inputBuffer, "leave chat") == 0) {
+                break;
+            }
+            if (sendMessage(peerSocket, inputBuffer) < 0) {
+                break;
+            }
+        }
+        char closeConnection[] = "CLOSEDM";
+        sendMessage(peerSocket, closeConnection);
+        
+        // Cancel the message recieving thread
+        pthread_cancel(messageReciever);
+        pthread_join(messageReciever, NULL);
+    }
+    
+    return;
+}
+
+static void *recvMessage(void *arg) {\
+    char recvBuffer[BUFFERSIZE] = {0}; // buffer for messages from server
+    while (true) {
+        readMessage(peerSocket, recvBuffer);
+        if (strcmp(recvBuffer, "CLOSEDM") == 0) {
+            printf(YELLOW("Peer had left, type \"leave chat\" to leave.")"\n");
+            break;
+        } else {
+            printf(BBLUE("%s: ")" ", currentPeerID);
+            printf(BLUE("%s")"\n", recvBuffer);
+            printf(BRED(BOLD("%s>"))RED(" \n"), currentUserID);
+        }
+        
+        pthread_testcancel();
+    }
+    return NULL;
 }
 
 //MARK: - Helper Functions
@@ -191,8 +422,7 @@ static int connectToServer(int clientSocket) {
     }
     
     // Connect to server
-    int status;
-    if ((status = connect(clientSocket, (struct sockaddr*)&serverAddress, addrlen)) < 0) {
+    if (connect(clientSocket, (struct sockaddr*)&serverAddress, addrlen) < 0) {
         perror(RED("Connection to server failed\n"));
         //exit(EXIT_FAILURE);
         clientSocket = -1;
@@ -228,14 +458,23 @@ static int setListeningSocket(int listeningSocket, int listeningPort) {
         exit(EXIT_FAILURE);
     }
     
+    // Listen for connections
+    int maxWaitingToConnect = 10;
+    if (listen(listeningSocket, maxWaitingToConnect) < 0) {
+        perror(RED("[ERROR]")" Listening for connection failed\n");
+        exit(EXIT_FAILURE);
+    }
+    
     return listeningSocket;
 }
 
-static void sendMessage(int socket, char *buffer) {
+static int sendMessage(int socket, char *buffer) {
     int32_t messageLength = htonl(strlen(buffer) + 1);
-    send(socket, &messageLength, sizeof(messageLength), 0);
+    if (send(socket, &messageLength, sizeof(messageLength), 0) < 0) {
+        return -1;
+    }
     send(socket, buffer, strlen(buffer) + 1, 0);
-    return;
+    return 0;
 }
 
 static void readMessage(int socket, char *buffer) {
@@ -245,12 +484,13 @@ static void readMessage(int socket, char *buffer) {
     return;
 }
 
-static int parseInput(char *token, char *buffer){
+static int parseInput(char *token, char *buffer, char (*input)[BUFFERSIZE]){
     int parameterIndex = 0;
     while (token != NULL) {
         if (parameterIndex >= 4) {
             break;
         }
+        strcpy(input[parameterIndex], token);
         strcat(buffer, token);
         strcat(buffer, " ");
         token = strtok(NULL, " ");
