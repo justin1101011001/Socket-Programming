@@ -10,8 +10,8 @@
 #include <assert.h>
 #include <stdio.h>
 #include <errno.h>
+#include <ctype.h>
 #include <time.h>
-
 #include "client.h"
 
 #define SERVERPORT 12014
@@ -21,6 +21,7 @@ static pthread_t messageReciever;
 static pthread_t DMAcceptor;
 
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t drawWindow = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t readyToAccept = PTHREAD_COND_INITIALIZER; // Used by acceptDM to indicate readiness to accept the next connection from a peer
 
 bool acceptSignal = false; // DM request accpeted, used by acceptDM to indicate readiness to accept the next connection from a peer
@@ -256,6 +257,7 @@ int main(int argc, char const* argv[]) {
                 }
                 
                 // Start chat session
+                printf(YELLOW("Entering chat...\n"));
                 strcpy(currentPeerID, inputTokens[1]);
                 oneToOneChat();
                 close(peerSocket);
@@ -388,52 +390,137 @@ static void *acceptDM(void *arg) {
 }
 
 static void oneToOneChat(void) {
+    // UI setup
+    initscr();
+    cbreak();
+    noecho();
+    keypad(stdscr, TRUE);
     
-    char inputBuffer[BUFFERSIZE] = {0}; // buffer for user input
+    int rows, cols;
+    getmaxyx(stdscr, rows, cols);
     
+    WINDOW *messageWindow = newwin(rows - 2, cols, 0, 0);
+    WINDOW *inputWindow = newwin(1, cols, rows - 1, 0);
+    WINDOW *statusWindow = newwin(1, cols, rows - 2, 0);
+    scrollok(messageWindow, TRUE);
+    idlok(messageWindow, TRUE);
+    
+    WindowPair threadData;
+    threadData.message = messageWindow;
+    threadData.input = inputWindow;
     // Create message reciever thread for chat
-    if (pthread_create(&messageReciever, NULL, recvMessage, NULL) != 0) {
+    if (pthread_create(&messageReciever, NULL, recvMessage, &threadData) != 0) {
         perror(RED("[ERROR]")" Failed to create message reciever thread\n");
+        endwin();
         exit(EXIT_FAILURE);
     }
-    printf("Type \"leave chat\" to leave the current chat\n");
+    
+    char inputBuffer[BUFFERSIZE] = ""; // buffer for user input
+    int pos = 0;
+    int currentUserIDLength = (int)(strlen(currentUserID));
+    int inputCharacter;
+    
+    // Draw essage area
+    werase(messageWindow);
+    wprintw(messageWindow, "");
+    pthread_mutex_lock(&drawWindow);
+    wrefresh(messageWindow);
+    pthread_mutex_unlock(&drawWindow);
+    
+    // Draw Status bar
+    werase(statusWindow);
+    wattron(statusWindow, A_REVERSE);
+    mvwprintw(statusWindow, 0, 0, " Chatting with %s | Press ESC to leave ", currentPeerID);
+    wattroff(statusWindow, A_REVERSE);
+    pthread_mutex_lock(&drawWindow);
+    wrefresh(statusWindow);
+    pthread_mutex_unlock(&drawWindow);
+
+    // Draw input field
+    werase(inputWindow);
+    mvwprintw(inputWindow, 0, 0, "%s> %s", currentUserID, inputBuffer);
+    curs_set(1); // Show cursor
+    wmove(inputWindow, 0, pos + 2 + currentUserIDLength); // Move cursor to inputWindow
+    pthread_mutex_lock(&drawWindow);
+    wrefresh(inputWindow);
+    pthread_mutex_unlock(&drawWindow);
     
     // Keep reading user input and send them
     while (true) {
-        printf(BRED(BOLD("%s>"))" ", currentUserID);
-        fgets(inputBuffer, BUFFERSIZE, stdin); // read whole line of input
-        inputBuffer[strcspn(inputBuffer, "\n")] = '\0'; // trim off the newline character at the end
-        if (strcmp(inputBuffer, "leave chat") == 0) {
+        inputCharacter = wgetch(inputWindow);
+        if (inputCharacter == 27) { // ESC key
             break;
+        } else if (inputCharacter == '\n') { // input with \n as ending
+            if (pos > 0) {
+                inputBuffer[pos] = '\0';
+                
+                // Else display & send message
+                sendMessage(peerSocket, inputBuffer);
+                wprintw(messageWindow, "%s: %s\n", currentUserID, inputBuffer);
+                pthread_mutex_lock(&drawWindow);
+                wrefresh(messageWindow);
+                pthread_mutex_unlock(&drawWindow);
+                pos = 0;
+                memset(inputBuffer, 0, sizeof(inputBuffer));
+            }
+        } else if (inputCharacter == KEY_BACKSPACE || inputCharacter == 127) { // Backspace
+            if (pos > 0) {
+                inputBuffer[--pos] = '\0';
+            }
+        } else if (isprint(inputCharacter) && pos < BUFFERSIZE - 1) {
+            inputBuffer[pos++] = inputCharacter;
         }
-        if (sendMessage(peerSocket, inputBuffer) < 0) {
-            break;
-        }
+        
+        // Draw Status bar
+        werase(statusWindow);
+        wattron(statusWindow, A_REVERSE);
+        mvwprintw(statusWindow, 0, 0, " Chatting with %s | Press ESC to leave ", currentPeerID);
+        wattroff(statusWindow, A_REVERSE);
+        pthread_mutex_lock(&drawWindow);
+        wrefresh(statusWindow);
+        pthread_mutex_unlock(&drawWindow);
+
+        // Draw input field
+        werase(inputWindow);
+        mvwprintw(inputWindow, 0, 0, "%s> %s", currentUserID, inputBuffer);
+        wmove(inputWindow, 0, pos + 2 + currentUserIDLength);
+        pthread_mutex_lock(&drawWindow);
+        wrefresh(inputWindow);
+        pthread_mutex_unlock(&drawWindow);
     }
     sendMessage(peerSocket, "CLOSEDM");
     
     // Cancel the message recieving thread
     pthread_cancel(messageReciever);
     pthread_join(messageReciever, NULL);
-    
+    endwin();
     return;
 }
 
 static void *recvMessage(void *arg) {
-    char recvBuffer[BUFFERSIZE] = {0}; // buffer for messages from peer
+    WindowPair threadData = *(WindowPair *)arg;
+    char recvBuffer[BUFFERSIZE] = ""; // buffer for messages from peer
+    
     while (true) {
         readMessage(peerSocket, recvBuffer);
+        
         if (strcmp(recvBuffer, "CLOSEDM") == 0) {
             currentPeerID[0] = '\0';
             close(peerSocket);
             peerSocket = -1;
-            printf("\n"YELLOW("Peer had left. (Hit enter to continue)\n"));
+            
+            wprintw(threadData.message, "Peer left the chat. (Hit ESC to continue)\n");
+            pthread_mutex_lock(&drawWindow);
+            wrefresh(threadData.message);
+            wrefresh(threadData.input);
+            pthread_mutex_unlock(&drawWindow);
             break;
         } else {
-            printf("\n"BBLUE("%s:")" ", currentPeerID);
-            printf(BLUE("%s")"\n", recvBuffer);
-            printf(BRED(BOLD("%s>"))" ", currentUserID);
-            fflush(stdout);
+            wprintw(threadData.message, "%s: %s\n", currentPeerID, recvBuffer);
+            pthread_mutex_lock(&drawWindow);
+            wrefresh(threadData.message);
+            wrefresh(threadData.input);
+            pthread_mutex_unlock(&drawWindow);
         }
         
         pthread_testcancel();

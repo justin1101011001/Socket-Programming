@@ -29,6 +29,11 @@
 
 #define BUFFERSIZE 1024
 
+typedef struct windowPair {
+    WINDOW *message;
+    WINDOW *input;
+} WindowPair;
+
 static int connectToServer(int clientSocket);
 static int setListeningSocket(int listeningSocket, int listeningPort);
 static int sendMessage(int socket, char *buffer);
