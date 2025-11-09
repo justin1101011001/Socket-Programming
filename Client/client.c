@@ -3,6 +3,7 @@
 #include <arpa/inet.h>
 #include <stdbool.h>
 #include <pthread.h>
+#include <ncurses.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -41,6 +42,7 @@ int main(int argc, char const* argv[]) {
     char inputBuffer[BUFFERSIZE] = {0}; // buffer for user input
     bool loggedIn = false; // is the user currently logged in
     
+    // Create thread to accept DM requests
     if (pthread_create(&DMAcceptor, NULL, acceptDM, &listeningSocket) != 0) {
         perror(RED("[ERROR]")" Failed to create DM acceptor thread\n");
         exit(EXIT_FAILURE);
@@ -329,11 +331,13 @@ static void *acceptDM(void *arg) {
     socklen_t addrlen = sizeof(address); // length of address
     
     while (true) {
+        // Accept new connection
         if ((tmp = accept(listeningSocket, (struct sockaddr*)&address, &addrlen)) < 0) {
             fprintf(stderr, RED("[ERROR]")" Accepting connection failed\n");
             continue;
         }
         
+        // Reject request if a chat session is already in progress
         pthread_mutex_lock(&mutex);
         if (DMOngoing) {
             readMessage(tmp, NULL);
@@ -345,6 +349,7 @@ static void *acceptDM(void *arg) {
         }
         pthread_mutex_unlock(&mutex);
 
+        // Read peer ID, ask user to accept request. Request times out after 30 seconds if user doesn't accept
         peerSocket = tmp;
         readMessage(peerSocket, currentPeerID);
         printf("\n[INCOMING] %s wants to chat, accept? [accept](30s)\n", currentPeerID);
@@ -375,6 +380,8 @@ static void *acceptDM(void *arg) {
         acceptSignal = false;
         pendingRequest = false;
         pthread_mutex_unlock(&mutex);
+        
+        pthread_testcancel();
     }
     
     return NULL;
@@ -413,7 +420,7 @@ static void oneToOneChat(void) {
 }
 
 static void *recvMessage(void *arg) {
-    char recvBuffer[BUFFERSIZE] = {0}; // buffer for messages from server
+    char recvBuffer[BUFFERSIZE] = {0}; // buffer for messages from peer
     while (true) {
         readMessage(peerSocket, recvBuffer);
         if (strcmp(recvBuffer, "CLOSEDM") == 0) {
