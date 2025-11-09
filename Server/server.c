@@ -362,6 +362,16 @@ static void *consoleWatcher(void *arg) {
                 serverSocketGlobal = -1;
             }
             break;
+        } else if (strncmp(line, "list", 4) == 0) { // List registered users
+            fprintf(stderr, YELLOW("[CONTROL]")" Listing registered users:\n");
+            pthread_mutex_lock(&userList_mutex);
+            User *u = registeredUsers;
+            while (u != NULL) {
+                fprintf(stderr, YELLOW("[CONTROL]")" %s\n", u -> ID);
+                u = u -> regNext;
+            }
+            pthread_mutex_unlock(&userList_mutex);
+            fprintf(stderr, YELLOW("[CONTROL]")" End of list\n");
         }
     }
     return NULL;

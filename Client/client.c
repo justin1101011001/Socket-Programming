@@ -241,7 +241,7 @@ int main(int argc, char const* argv[]) {
                 // Wait for peer response
                 char response[3];
                 sendMessage(peerSocket, currentUserID); // Send messaging request
-                printf(YELLOW("Waiting for peer to repond, please wait(30s)...")"\n");
+                printf(YELLOW("Waiting for peer to repond, please wait(10s)...")"\n");
                 readMessage(peerSocket, response);
                 
                 if (strcmp(response, "no") == 0) { // Request timed out
@@ -260,6 +260,7 @@ int main(int argc, char const* argv[]) {
                 printf(YELLOW("Entering chat...\n"));
                 strcpy(currentPeerID, inputTokens[1]);
                 oneToOneChat();
+                printf(YELLOW("...chat with %s ended\n"), currentPeerID);
                 close(peerSocket);
                 peerSocket = -1;
                 currentPeerID[0] = '\0';
@@ -299,6 +300,7 @@ int main(int argc, char const* argv[]) {
             
             // Start chat session
             oneToOneChat();
+            printf(YELLOW("...chat with %s ended\n"), currentPeerID);
             close(peerSocket);
             peerSocket = -1;
             currentPeerID[0] = '\0';
@@ -309,13 +311,14 @@ int main(int argc, char const* argv[]) {
             
 //MARK: - Help
         } else if (strcmp(token, "help") == 0) {
-            printf(YELLOW("%-36s")": %-25s\n", "Registration", "register <ID> <password>");
-            printf(YELLOW("%-36s")": %-25s\n", "Deregistration(must be logged in)", "deregister <ID> <password>");
-            printf(YELLOW("%-36s")": %-25s\n", "Login(must be registered)", "login <ID> <password>");
-            printf(YELLOW("%-36s")": %-25s\n", "Logout(must be logged in)", "logout");
-            printf(YELLOW("%-36s")": %-25s\n", "List Online Users(must be logged in)", "list");
-            printf(YELLOW("%-36s")": %-25s\n", "Chat with user(must be logged in)", "chat <ID>");
-            printf(YELLOW("%-36s")": %-25s\n", "Exit Client Program", "exit");
+            printf(YELLOW("%-25s")": %-25s\n", "Registration", "register <ID> <password>");
+            printf(YELLOW("%-25s")": %-25s\n", "Deregistration", "deregister <ID> <password>");
+            printf(YELLOW("%-25s")": %-25s\n", "Login", "login <ID> <password>");
+            printf(YELLOW("%-25s")": %-25s\n", "Logout", "logout");
+            printf(YELLOW("%-25s")": %-25s\n", "List Online Users", "list");
+            printf(YELLOW("%-25s")": %-25s\n", "Chat with user", "chat <ID>");
+            printf(YELLOW("%-25s")": %-25s\n", "Accept chat request", "chat <ID>");
+            printf(YELLOW("%-25s")": %-25s\n", "Exit Client Program", "exit");
         } else {
             printf("Unknown command, type \"help\" for usage.\n");
         }
@@ -323,6 +326,10 @@ int main(int argc, char const* argv[]) {
     
     pthread_cancel(DMAcceptor);
     pthread_join(DMAcceptor, NULL);
+    
+    pthread_mutex_destroy(&mutex);
+    pthread_mutex_destroy(&drawWindow);
+    pthread_cond_destroy(&readyToAccept);
     
     return 0;
 }
@@ -354,7 +361,7 @@ static void *acceptDM(void *arg) {
         // Read peer ID, ask user to accept request. Request times out after 30 seconds if user doesn't accept
         peerSocket = tmp;
         readMessage(peerSocket, currentPeerID);
-        printf("\n[INCOMING] %s wants to chat, accept? [accept](30s)\n", currentPeerID);
+        printf("\n"YELLOW("[INCOMING]")BLUE(" %s")" wants to chat, accept? [accept](10s)\n", currentPeerID);
         printf(BOLD("%s> "), currentUserID);
         fflush(stdout);
         
@@ -365,7 +372,7 @@ static void *acceptDM(void *arg) {
         // Compute wake-up time (30 seconds from now)
         struct timespec ts;
         clock_gettime(CLOCK_REALTIME, &ts);
-        ts.tv_sec += 30;
+        ts.tv_sec += 10;
         
         // Wait for accept or timeout
         while (!acceptSignal) {
@@ -395,6 +402,12 @@ static void oneToOneChat(void) {
     cbreak();
     noecho();
     keypad(stdscr, TRUE);
+    start_color(); // Enable color functionality
+    use_default_colors(); // Optional: allow transparency with terminal default background
+    
+    init_pair(1, COLOR_RED, -1); // Red text on default background
+    init_pair(2, COLOR_BLUE, -1); // Blue text on default background
+    init_pair(3, COLOR_YELLOW, -1); // Yellow text on default background
     
     int rows, cols;
     getmaxyx(stdscr, rows, cols);
@@ -429,16 +442,18 @@ static void oneToOneChat(void) {
     
     // Draw Status bar
     werase(statusWindow);
-    wattron(statusWindow, A_REVERSE);
+    wattron(statusWindow, A_REVERSE | COLOR_PAIR(3));
     mvwprintw(statusWindow, 0, 0, " Chatting with %s | Press ESC to leave ", currentPeerID);
-    wattroff(statusWindow, A_REVERSE);
+    wattroff(statusWindow, A_REVERSE | COLOR_PAIR(3));
     pthread_mutex_lock(&drawWindow);
     wrefresh(statusWindow);
     pthread_mutex_unlock(&drawWindow);
 
     // Draw input field
     werase(inputWindow);
+    wattron(inputWindow, COLOR_PAIR(1));
     mvwprintw(inputWindow, 0, 0, "%s> %s", currentUserID, inputBuffer);
+    wattroff(inputWindow, COLOR_PAIR(1));
     curs_set(1); // Show cursor
     wmove(inputWindow, 0, pos + 2 + currentUserIDLength); // Move cursor to inputWindow
     pthread_mutex_lock(&drawWindow);
@@ -456,7 +471,9 @@ static void oneToOneChat(void) {
                 
                 // Else display & send message
                 sendMessage(peerSocket, inputBuffer);
+                wattron(messageWindow, COLOR_PAIR(1));
                 wprintw(messageWindow, "%s: %s\n", currentUserID, inputBuffer);
+                wattroff(messageWindow, COLOR_PAIR(1));
                 pthread_mutex_lock(&drawWindow);
                 wrefresh(messageWindow);
                 pthread_mutex_unlock(&drawWindow);
@@ -473,16 +490,18 @@ static void oneToOneChat(void) {
         
         // Draw Status bar
         werase(statusWindow);
-        wattron(statusWindow, A_REVERSE);
+        wattron(statusWindow, A_REVERSE | COLOR_PAIR(3));
         mvwprintw(statusWindow, 0, 0, " Chatting with %s | Press ESC to leave ", currentPeerID);
-        wattroff(statusWindow, A_REVERSE);
+        wattroff(statusWindow, A_REVERSE | COLOR_PAIR(3));
         pthread_mutex_lock(&drawWindow);
         wrefresh(statusWindow);
         pthread_mutex_unlock(&drawWindow);
 
         // Draw input field
         werase(inputWindow);
+        wattron(inputWindow, COLOR_PAIR(1));
         mvwprintw(inputWindow, 0, 0, "%s> %s", currentUserID, inputBuffer);
+        wattroff(inputWindow, COLOR_PAIR(1));
         wmove(inputWindow, 0, pos + 2 + currentUserIDLength);
         pthread_mutex_lock(&drawWindow);
         wrefresh(inputWindow);
@@ -509,14 +528,18 @@ static void *recvMessage(void *arg) {
             close(peerSocket);
             peerSocket = -1;
             
+            wattron(threadData.message, COLOR_PAIR(3));
             wprintw(threadData.message, "Peer left the chat. (Hit ESC to continue)\n");
+            wattroff(threadData.message, COLOR_PAIR(3));
             pthread_mutex_lock(&drawWindow);
             wrefresh(threadData.message);
             wrefresh(threadData.input);
             pthread_mutex_unlock(&drawWindow);
             break;
         } else {
+            wattron(threadData.message, COLOR_PAIR(2));
             wprintw(threadData.message, "%s: %s\n", currentPeerID, recvBuffer);
+            wattroff(threadData.message, COLOR_PAIR(2));
             pthread_mutex_lock(&drawWindow);
             wrefresh(threadData.message);
             wrefresh(threadData.input);
@@ -617,7 +640,9 @@ static int parseInput(char *token, char *buffer, char (*input)[BUFFERSIZE]){
         if (parameterIndex >= 4) {
             break;
         }
-        strcpy(input[parameterIndex], token);
+        if (input != NULL) {
+            strcpy(input[parameterIndex], token);
+        }
         strcat(buffer, token);
         strcat(buffer, " ");
         token = strtok(NULL, " ");
