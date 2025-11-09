@@ -20,16 +20,16 @@ static pthread_t messageReciever;
 static pthread_t DMAcceptor;
 
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
-pthread_cond_t readyToAccept = PTHREAD_COND_INITIALIZER;
+pthread_cond_t readyToAccept = PTHREAD_COND_INITIALIZER; // Used by acceptDM to indicate readiness to accept the next connection from a peer
 
-bool acceptSignal = false; // DM request accpeted
+bool acceptSignal = false; // DM request accpeted, used by acceptDM to indicate readiness to accept the next connection from a peer
 bool DMOngoing = false; // Flag indicating if there's an ongoing DM session
-bool pendingRequest = false;
+bool pendingRequest = false; // Flag indicating if there's a pending DM request from a peer
 
 char currentUserID[100] = "";
 char currentPeerID[100] = "";
 
-int peerSocket; // Used for DM
+int peerSocket; // Used for DM with a peer
 
 int main(int argc, char const* argv[]) {
 //MARK: - Socket Setup
@@ -198,7 +198,7 @@ int main(int argc, char const* argv[]) {
                     continue;
                 }
                 if (strcmp(inputTokens[1], currentUserID) == 0) { // Don't allow messaging oneself
-                    printf("???\n");
+                    printf("??? Make some friends???\n");
                     continue;
                 }
                 if (DMOngoing) {
@@ -225,7 +225,6 @@ int main(int argc, char const* argv[]) {
                     perror(RED("[ERROR]")" Socket creation failed\n");
                     exit(EXIT_FAILURE);
                 }
-                
                 if (connect(peerSocket, (struct sockaddr*)&peerAddress, addrlen) < 0) {
                     printf(RED("Peer offline :(\n"));
                     peerSocket = -1;
@@ -236,9 +235,30 @@ int main(int argc, char const* argv[]) {
                 DMOngoing = true;
                 pthread_mutex_unlock(&mutex);
                 
+                // Wait for peer response
+                char response[3];
+                sendMessage(peerSocket, currentUserID); // Send messaging request
+                printf(YELLOW("Waiting for peer to repond, please wait(30s)...")"\n");
+                readMessage(peerSocket, response);
+                
+                if (strcmp(response, "no") == 0) { // Request timed out
+                    printf(YELLOW("Peer did not accept DM request :(\n"));
+                    DMOngoing = false;
+                    pthread_mutex_unlock(&mutex);
+                    continue;
+                } else if (strcmp(response, "nob") == 0) { // Peer in another chat session already
+                    printf(YELLOW("Peer busy, please try again later.\n"));
+                    DMOngoing = false;
+                    pthread_mutex_unlock(&mutex);
+                    continue;
+                }
+                
+                // Start chat session
                 strcpy(currentPeerID, inputTokens[1]);
                 oneToOneChat();
                 close(peerSocket);
+                peerSocket = -1;
+                currentPeerID[0] = '\0';
                 
                 pthread_mutex_lock(&mutex);
                 DMOngoing = false;
@@ -255,7 +275,7 @@ int main(int argc, char const* argv[]) {
                 continue;
             }
             if (!pendingRequest) {
-                printf(YELLOW("No incoming message request now\n"));
+                printf(YELLOW("No incoming message requests now\n"));
                 continue;
             }
             if (DMOngoing) {
@@ -263,49 +283,24 @@ int main(int argc, char const* argv[]) {
                 continue;
             }
             
-            // Notify acceptDM thread NOT ready to accpet next incoming request
+            // Notify acceptDM thread ready to accpet next incoming request
             pthread_mutex_lock(&mutex);
             DMOngoing = true;
             acceptSignal = true;
             pthread_cond_signal(&readyToAccept);
             pthread_mutex_unlock(&mutex);
             
-            char inputBuffer[BUFFERSIZE] = {0}; // buffer for user input
+            // Accept DM request
+            sendMessage(peerSocket, "yes");
             
-            // Create message reciever thread for chat
-            if (pthread_create(&messageReciever, NULL, recvMessage, currentPeerID) != 0) {
-                perror(RED("[ERROR]")" Failed to create message reciever thread\n");
-                exit(EXIT_FAILURE);
-            }
-            char response[] = "yes";
-            sendMessage(peerSocket, response);
-            
-            printf("Type \"leave chat\" to leave the current chat\n");
-            // Keep reading user input and send them
-            while (true) {
-                printf(BRED(BOLD("%s>"))" ", currentUserID);
-                fgets(inputBuffer, BUFFERSIZE, stdin); // read whole line of input
-                inputBuffer[strcspn(inputBuffer, "\n")] = '\0'; // trim off the newline character at the end
-                if (strcmp(inputBuffer, "leave chat") == 0) {
-                    break;
-                }
-                if (sendMessage(peerSocket, inputBuffer) < 0) {
-                    break;
-                }
-            }
-            char closeConnection[] = "CLOSEDM";
-            sendMessage(peerSocket, closeConnection);
-            
-            // Cancel the message recieving thread
-            pthread_cancel(messageReciever);
-            pthread_join(messageReciever, NULL);
+            // Start chat session
+            oneToOneChat();
             close(peerSocket);
             peerSocket = -1;
             currentPeerID[0] = '\0';
             
             pthread_mutex_lock(&mutex);
             DMOngoing = false;
-            //pthread_cond_signal(&readyToAccept); // notify acceptDM thread ready to accpet next incoming request
             pthread_mutex_unlock(&mutex);
             
 //MARK: - Help
@@ -359,27 +354,26 @@ static void *acceptDM(void *arg) {
         // Wait 30 seconds or request accepted
         pthread_mutex_lock(&mutex);
         pendingRequest = true;
+        
         // Compute wake-up time (30 seconds from now)
         struct timespec ts;
         clock_gettime(CLOCK_REALTIME, &ts);
         ts.tv_sec += 30;
-
+        
         // Wait for accept or timeout
         while (!acceptSignal) {
             int ret = pthread_cond_timedwait(&readyToAccept, &mutex, &ts);
             if (ret == ETIMEDOUT) {
                 sendMessage(peerSocket, "no");
+                shutdown(peerSocket, SHUT_WR);
                 close(peerSocket);
                 peerSocket = -1;
                 break;
             }
         }
+        
         acceptSignal = false;
         pendingRequest = false;
-
-//        while (DMOngoing) {
-//            pthread_cond_wait(&readyToAccept, &mutex);
-//        }
         pthread_mutex_unlock(&mutex);
     }
     
@@ -387,44 +381,33 @@ static void *acceptDM(void *arg) {
 }
 
 static void oneToOneChat(void) {
-    char response[3];
-    sendMessage(peerSocket, currentUserID); // Send messaging request
-    printf("Waiting for peer to repond, please wait(30s)...\n");
-    readMessage(peerSocket, response);
     
-    if (strcmp(response, "no") == 0) {
-        printf(YELLOW("Peer did not accept DM request :(\n"));
-    } else if (strcmp(response, "nob") == 0) {
-        printf(YELLOW("Peer busy, please try again later.\n"));
-    } else {
-        char inputBuffer[BUFFERSIZE] = {0}; // buffer for user input
-        
-        // Create message reciever thread for chat
-        if (pthread_create(&messageReciever, NULL, recvMessage, NULL) != 0) {
-            perror(RED("[ERROR]")" Failed to create message reciever thread\n");
-            exit(EXIT_FAILURE);
-        }
-        printf("Type \"leave chat\" to leave the current chat\n");
-        
-        // Keep reading user input and send them
-        while (true) {
-            printf(BRED(BOLD("%s>"))" ", currentUserID);
-            fgets(inputBuffer, BUFFERSIZE, stdin); // read whole line of input
-            inputBuffer[strcspn(inputBuffer, "\n")] = '\0'; // trim off the newline character at the end
-            if (strcmp(inputBuffer, "leave chat") == 0) {
-                break;
-            }
-            if (sendMessage(peerSocket, inputBuffer) < 0) {
-                break;
-            }
-        }
-        char closeConnection[] = "CLOSEDM";
-        sendMessage(peerSocket, closeConnection);
-        
-        // Cancel the message recieving thread
-        pthread_cancel(messageReciever);
-        pthread_join(messageReciever, NULL);
+    char inputBuffer[BUFFERSIZE] = {0}; // buffer for user input
+    
+    // Create message reciever thread for chat
+    if (pthread_create(&messageReciever, NULL, recvMessage, NULL) != 0) {
+        perror(RED("[ERROR]")" Failed to create message reciever thread\n");
+        exit(EXIT_FAILURE);
     }
+    printf("Type \"leave chat\" to leave the current chat\n");
+    
+    // Keep reading user input and send them
+    while (true) {
+        printf(BRED(BOLD("%s>"))" ", currentUserID);
+        fgets(inputBuffer, BUFFERSIZE, stdin); // read whole line of input
+        inputBuffer[strcspn(inputBuffer, "\n")] = '\0'; // trim off the newline character at the end
+        if (strcmp(inputBuffer, "leave chat") == 0) {
+            break;
+        }
+        if (sendMessage(peerSocket, inputBuffer) < 0) {
+            break;
+        }
+    }
+    sendMessage(peerSocket, "CLOSEDM");
+    
+    // Cancel the message recieving thread
+    pthread_cancel(messageReciever);
+    pthread_join(messageReciever, NULL);
     
     return;
 }

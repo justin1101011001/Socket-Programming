@@ -106,8 +106,7 @@ static void handle_client(int perClientSocket) {
             
             removeFromList(LOGLIST, &currentUser); // Update logged in user list
             fprintf(stderr, MAGENTA("[LOG]")"  | Removed user from logged-in list\n");
-            char sendBuffer[] = "Successfully logged out.\n";
-            sendMessage(perClientSocket, sendBuffer);
+            sendMessage(perClientSocket, "Successfully logged out.\n");
             
             close(perClientSocket);
             fprintf(stderr, MAGENTA("[LOG]")"  | Connection to client %s:%d closed\n", ip_str, port);
@@ -131,12 +130,10 @@ static void handle_client(int perClientSocket) {
                 if (insertUserToList(REGLIST, inputTokens[1], inputTokens[2], NULL, NULL) == NULL) {
                     fprintf(stderr, RED("[ERROR]")"| Failed to insert user\n");
                 }
-                char sendBuffer[] = "Registration complete, please login to start using the service.\n";
-                sendMessage(perClientSocket, sendBuffer);
+                sendMessage(perClientSocket, "Registration complete, please login to start using the service.\n");
             } else {
                 fprintf(stderr, MAGENTA("[LOG]")"  | User already exists\n");
-                char sendBuffer[] = "This ID has been taken, please choose another one.\n";
-                sendMessage(perClientSocket, sendBuffer);
+                sendMessage(perClientSocket, "This ID has been taken, please choose another one.\n");
             }
             
             close(perClientSocket);
@@ -158,16 +155,14 @@ static void handle_client(int perClientSocket) {
             
             fprintf(stderr, MAGENTA("[LOG]")"  | Checking password\n");
             if (strcmp(inputTokens[1], currentUser -> password) != 0) { // Incorrect password
-                char sendBuffer[] = "Incorrect password, please try again\n";
-                sendMessage(perClientSocket, sendBuffer);
+                sendMessage(perClientSocket, "Incorrect password, please try again\n");
                 fprintf(stderr, MAGENTA("[LOG]")"  | Incorrect password\n");
                 fprintf(stderr, MAGENTA("[LOG]")"  +-Deregistration failed\n");
                 continue;
             }
             
             fprintf(stderr, MAGENTA("[LOG]")"  | Password accepted, send confirmation\n");
-            char comfirmation[] = "You are about to deregister, type \"yes\" to confirm.\n";
-            sendMessage(perClientSocket, comfirmation);
+            sendMessage(perClientSocket, "You are about to deregister, type \"yes\" to confirm.\n");
             readMessage(perClientSocket, recvBuffer);
             
             fprintf(stderr, MAGENTA("[LOG]")"  | Recieved confirmation: \"%s\"\n", recvBuffer);
@@ -175,16 +170,14 @@ static void handle_client(int perClientSocket) {
                 fprintf(stderr, MAGENTA("[LOG]")"  | Removing user from registered list\n");
                 removeFromList(REGLIST, &currentUser); // Remove user from registered list
                 fprintf(stderr, MAGENTA("[LOG]")"  | Successfully removed user from registered list\n");
-                char sendBuffer[] = "Successfully deregistered.\n";
-                sendMessage(perClientSocket, sendBuffer);
+                sendMessage(perClientSocket, "Successfully deregistered.\n");
                 
                 close(perClientSocket);
                 fprintf(stderr, MAGENTA("[LOG]")"  | Connection to client %s:%d closed\n", ip_str, port);
                 fprintf(stderr, MAGENTA("[LOG]")"  +-Deregistration complete\n");
                 break;
             } else { // Don't deregister
-                char sendBuffer[] = "Deregistration canceled.\n";
-                sendMessage(perClientSocket, sendBuffer);
+                sendMessage(perClientSocket, "Deregistration canceled.\n");
                 fprintf(stderr, MAGENTA("[LOG]")"  +-Deregistration canceled\n");
             }
             
@@ -202,8 +195,7 @@ static void handle_client(int perClientSocket) {
             // User not registered
             if (!userRegistered) {
                 fprintf(stderr, MAGENTA("[LOG]")"  | User not registered\n");
-                char sendBuffer[] = "No know user with this ID, please register first.\n";
-                sendMessage(perClientSocket, sendBuffer);
+                sendMessage(perClientSocket, "No know user with this ID, please register first.\n");
                 
                 close(perClientSocket);
                 fprintf(stderr, MAGENTA("[LOG]")"  | Connection to client %s:%d closed\n", ip_str, port);
@@ -216,8 +208,7 @@ static void handle_client(int perClientSocket) {
             fprintf(stderr, MAGENTA("[LOG]")"  | Checking password\n");
             if (strcmp(userRegistered -> password, inputTokens[2]) != 0) {
                 fprintf(stderr, MAGENTA("[LOG]")"  | Incorrect password\n");
-                char sendBuffer[] = "Incorrect password, please try again.\n";
-                sendMessage(perClientSocket, sendBuffer);
+                sendMessage(perClientSocket, "Incorrect password, please try again.\n");
                 
                 close(perClientSocket);
                 fprintf(stderr, MAGENTA("[LOG]")"  | Connection to client %s:%d closed\n", ip_str, port);
@@ -228,8 +219,7 @@ static void handle_client(int perClientSocket) {
             
             // Password correct, get client listening port
             fprintf(stderr, MAGENTA("[LOG]")"  | Requesting client listening port number\n");
-            char response[] = "OK.";
-            sendMessage(perClientSocket, response);
+            sendMessage(perClientSocket, "OK.");
             
             int32_t clientListenPort;
             read(perClientSocket, &clientListenPort, sizeof(clientListenPort));
@@ -243,8 +233,7 @@ static void handle_client(int perClientSocket) {
             currentUser = insertUserToList(LOGLIST, NULL, NULL, &clientListenAddress, &userRegistered);
             if (currentUser == NULL) { // Fail to insert
                 fprintf(stderr, RED("[ERROR]")"| Failed to insert user\n");
-                char sendBuffer[] = "Error logging in.\n";
-                sendMessage(perClientSocket, sendBuffer);
+                sendMessage(perClientSocket, "Error logging in.\n");
                 
                 close(perClientSocket);
                 fprintf(stderr, MAGENTA("[LOG]")"  | Connection to client %s:%d closed\n", ip_str, port);
@@ -252,8 +241,7 @@ static void handle_client(int perClientSocket) {
                 break;
             }
             
-            char sendBuffer[] = "Successfully logged in.\n";
-            sendMessage(perClientSocket, sendBuffer);
+            sendMessage(perClientSocket, "Successfully logged in.\n");
             fprintf(stderr, MAGENTA("[LOG]")"  +-Login process complete\n");
             
 //MARK: - List
@@ -269,8 +257,7 @@ static void handle_client(int perClientSocket) {
             }
             pthread_mutex_unlock(&userList_mutex);
             
-            char sendBuffer[] = "END OF USER LIST";
-            sendMessage(perClientSocket, sendBuffer);
+            sendMessage(perClientSocket, "END OF USER LIST");
             fprintf(stderr, MAGENTA("[LOG]")"  | Sent user list to client\n");
             fprintf(stderr, MAGENTA("[LOG]")"  +-List process complete\n");
            
@@ -280,22 +267,24 @@ static void handle_client(int perClientSocket) {
             char inputTokens[2][BUFFERSIZE] = {0}; // 1 = peer ID
             parseMessage(token, inputTokens);
             
+            fprintf(stderr, MAGENTA("[LOG]")"  | Checking if target peer is online\n");
             User *target = checkUserInList(LOGLIST, inputTokens[1]); // Retrieve target user
             if (target == NULL) { // Target not online
-                char sendBuffer[] = "Peer currently offline.\n";
-                sendMessage(perClientSocket, sendBuffer);
+                sendMessage(perClientSocket, "Peer currently offline.\n");
+                fprintf(stderr, MAGENTA("[LOG]")"  | Target peer offline or does noot exist\n");
+                fprintf(stderr, MAGENTA("[LOG]")"  +-Chat failed\n");
                 continue;
             }
             
-            char sendBuffer[] = "OK.";
-            sendMessage(perClientSocket, sendBuffer);
+            fprintf(stderr, MAGENTA("[LOG]")"  | Target peer online, sending connection info\n");
+            sendMessage(perClientSocket, "OK.");
             send(perClientSocket, &(target -> address.sin_addr.s_addr), sizeof(in_addr_t), 0); // Send IP address
             send(perClientSocket, &(target -> address.sin_port), sizeof(in_port_t), 0); // Send port number
             
+            fprintf(stderr, MAGENTA("[LOG]")"  +-Sent, keeping connection to client for next command\n");
             // close connection???
         } else { // Unknown command
-            char sendBuffer[] = "Unknown command.\n";
-            sendMessage(perClientSocket, sendBuffer);
+            sendMessage(perClientSocket, "Unknown command.\n");
         }
     } // End of while loop
     
