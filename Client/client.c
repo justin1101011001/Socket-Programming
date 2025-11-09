@@ -8,6 +8,8 @@
 #include <unistd.h>
 #include <assert.h>
 #include <stdio.h>
+#include <errno.h>
+#include <time.h>
 
 #include "client.h"
 
@@ -19,8 +21,10 @@ static pthread_t DMAcceptor;
 
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t readyToAccept = PTHREAD_COND_INITIALIZER;
-bool ready = 0; // Flag indicating ready for next incoming messaging request
+
+bool acceptSignal = false; // DM request accpeted
 bool DMOngoing = false; // Flag indicating if there's an ongoing DM session
+bool pendingRequest = false;
 
 char currentUserID[100] = "";
 char currentPeerID[100] = "";
@@ -44,10 +48,14 @@ int main(int argc, char const* argv[]) {
     
     while (true) {
         printf(BOLD("%s> "), currentUserID);
+        fflush(stdout);
         fgets(inputBuffer, BUFFERSIZE, stdin); // read whole line of input
         inputBuffer[strcspn(inputBuffer, "\n")] = '\0'; // trim off the newline character at the end
         char *token; // Pointer to store each token
         token = strtok(inputBuffer, " "); // Get the first token of input
+        if (token == NULL) { // Empty command, continue reading
+            continue;
+        }
        
 //MARK: - Exit
         if (strcmp(token, "exit") == 0) { // exit and end the client process
@@ -198,7 +206,7 @@ int main(int argc, char const* argv[]) {
                     continue;
                 }
                 
-                // Get peer address
+                // Get peer address from server
                 sendMessage(clientSocket, sendBuffer);
                 readMessage(clientSocket, recvBuffer);
                 if (strncmp(recvBuffer, "Peer", 4) == 0) { // Peer offline
@@ -212,12 +220,12 @@ int main(int argc, char const* argv[]) {
                 read(clientSocket, &(peerAddress.sin_addr.s_addr), sizeof(in_addr_t));
                 read(clientSocket, &(peerAddress.sin_port), sizeof(in_port_t));
 
+                // Connect to peer
                 if ((peerSocket = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
                     perror(RED("[ERROR]")" Socket creation failed\n");
                     exit(EXIT_FAILURE);
                 }
                 
-                // Connect to peer
                 if (connect(peerSocket, (struct sockaddr*)&peerAddress, addrlen) < 0) {
                     printf(RED("Peer offline :(\n"));
                     peerSocket = -1;
@@ -236,16 +244,26 @@ int main(int argc, char const* argv[]) {
             
 //MARK: - Accept DM
         } else if (strcmp(token, "accept") == 0){
+            if (!loggedIn) {
+                printf("You are currently not logged in, plaese login to use this feature.\n");
+                continue;
+            }
+            if (!pendingRequest) {
+                printf(YELLOW("No incoming message request now\n"));
+                continue;
+            }
             if (DMOngoing) {
                 printf(RED("Cannot have more than one ongoing chat at once\n"));
                 continue;
             }
-            if (peerSocket < 0) {
-                printf(YELLOW("No incoming message request now\n"));
-                continue;
-            }
             
+            // Notify acceptDM thread NOT ready to accpet next incoming request
+            pthread_mutex_lock(&mutex);
             DMOngoing = true;
+            acceptSignal = true;
+            pthread_cond_signal(&readyToAccept);
+            pthread_mutex_unlock(&mutex);
+            
             char inputBuffer[BUFFERSIZE] = {0}; // buffer for user input
             
             // Create message reciever thread for chat
@@ -259,7 +277,7 @@ int main(int argc, char const* argv[]) {
             printf("Type \"leave chat\" to leave the current chat\n");
             // Keep reading user input and send them
             while (true) {
-                printf(BRED(BOLD("%s>"))RED(" \n"), currentUserID);
+                printf(BRED(BOLD("%s>"))" ", currentUserID);
                 fgets(inputBuffer, BUFFERSIZE, stdin); // read whole line of input
                 inputBuffer[strcspn(inputBuffer, "\n")] = '\0'; // trim off the newline character at the end
                 if (strcmp(inputBuffer, "leave chat") == 0) {
@@ -276,12 +294,12 @@ int main(int argc, char const* argv[]) {
             pthread_cancel(messageReciever);
             pthread_join(messageReciever, NULL);
             close(peerSocket);
-            DMOngoing = false;
             peerSocket = -1;
             currentPeerID[0] = '\0';
             
             pthread_mutex_lock(&mutex);
-            ready = 1;
+            DMOngoing = false;
+            acceptSignal = false;
             pthread_cond_signal(&readyToAccept); // notify acceptDM thread ready to accpet next incoming request
             pthread_mutex_unlock(&mutex);
             
@@ -316,28 +334,35 @@ static void *acceptDM(void *arg) {
             continue;
         }
         readMessage(peerSocket, currentPeerID);
-        printf("\n[INCOMING] %s wants to chat, accept? [accept]\n", currentPeerID);
+        printf("\n[INCOMING] %s wants to chat, accept? [accept](30s)\n", currentPeerID);
         printf(BOLD("%s> "), currentUserID);
         fflush(stdout);
         
-        sleep(30); // Time out pending request
-        if (!DMOngoing) {
-            char response[] = "no";
-            sendMessage(peerSocket, response);
-            close(peerSocket);
-            peerSocket = -1;
-            currentPeerID[0] = '\0';
-            pthread_mutex_lock(&mutex);
-            ready = 1;
-            pthread_cond_signal(&readyToAccept);
-            pthread_mutex_unlock(&mutex);
-        }
-        
+        // Wait 30 seconds or request accepted
         pthread_mutex_lock(&mutex);
-        while (!ready) {
-            pthread_cond_wait(&readyToAccept, &mutex); // wait until ready = 1
+        pendingRequest = true;
+        // Compute wake-up time (30 seconds from now)
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_sec += 30;
+
+        // Wait for accept or timeout
+        while (!acceptSignal) {
+            int ret = pthread_cond_timedwait(&readyToAccept, &mutex, &ts);
+            if (ret == ETIMEDOUT) {
+                sendMessage(peerSocket, "no");
+                currentPeerID[0] = '\0';
+                close(peerSocket);
+                peerSocket = -1;
+                pendingRequest = false;
+                break;
+            }
         }
-        ready = 0; // reset flag for next iteration
+      
+        while (DMOngoing) {
+            pthread_cond_wait(&readyToAccept, &mutex);
+        }
+        pendingRequest = false;
         pthread_mutex_unlock(&mutex);
     }
     
@@ -347,6 +372,7 @@ static void *acceptDM(void *arg) {
 static void oneToOneChat(void) {
     char response[3];
     sendMessage(peerSocket, currentUserID); // Send messaging request
+    printf("Waiting for peer to repond, please wait(30s)...\n");
     readMessage(peerSocket, response);
     
     if (strcmp(response, "no") == 0) {
@@ -360,9 +386,10 @@ static void oneToOneChat(void) {
             exit(EXIT_FAILURE);
         }
         printf("Type \"leave chat\" to leave the current chat\n");
+        
         // Keep reading user input and send them
         while (true) {
-            printf(BRED(BOLD("%s>"))RED(" \n"), currentUserID);
+            printf(BRED(BOLD("%s>"))" ", currentUserID);
             fgets(inputBuffer, BUFFERSIZE, stdin); // read whole line of input
             inputBuffer[strcspn(inputBuffer, "\n")] = '\0'; // trim off the newline character at the end
             if (strcmp(inputBuffer, "leave chat") == 0) {
@@ -383,17 +410,21 @@ static void oneToOneChat(void) {
     return;
 }
 
-static void *recvMessage(void *arg) {\
+static void *recvMessage(void *arg) {
     char recvBuffer[BUFFERSIZE] = {0}; // buffer for messages from server
     while (true) {
         readMessage(peerSocket, recvBuffer);
         if (strcmp(recvBuffer, "CLOSEDM") == 0) {
-            printf(YELLOW("Peer had left, type \"leave chat\" to leave.")"\n");
+            currentPeerID[0] = '\0';
+            close(peerSocket);
+            peerSocket = -1;
+            printf("\n"YELLOW("Peer had left.")"\n"BOLD("%s> "), currentUserID);
             break;
         } else {
-            printf(BBLUE("%s: ")" ", currentPeerID);
+            printf("\n"BBLUE("%s:")" ", currentPeerID);
             printf(BLUE("%s")"\n", recvBuffer);
-            printf(BRED(BOLD("%s>"))RED(" \n"), currentUserID);
+            printf(BRED(BOLD("%s>"))" ", currentUserID);
+            fflush(stdout);
         }
         
         pthread_testcancel();
