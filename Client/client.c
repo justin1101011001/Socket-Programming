@@ -232,11 +232,17 @@ int main(int argc, char const* argv[]) {
                     continue;
                 }
                 
+                pthread_mutex_lock(&mutex);
                 DMOngoing = true;
+                pthread_mutex_unlock(&mutex);
+                
                 strcpy(currentPeerID, inputTokens[1]);
                 oneToOneChat();
                 close(peerSocket);
+                
+                pthread_mutex_lock(&mutex);
                 DMOngoing = false;
+                pthread_mutex_unlock(&mutex);
                 
             } else {
                 printf("Invalid parameters.\nUsage: chat <ID>\n");
@@ -299,8 +305,7 @@ int main(int argc, char const* argv[]) {
             
             pthread_mutex_lock(&mutex);
             DMOngoing = false;
-            acceptSignal = false;
-            pthread_cond_signal(&readyToAccept); // notify acceptDM thread ready to accpet next incoming request
+            //pthread_cond_signal(&readyToAccept); // notify acceptDM thread ready to accpet next incoming request
             pthread_mutex_unlock(&mutex);
             
 //MARK: - Help
@@ -324,15 +329,28 @@ int main(int argc, char const* argv[]) {
 }
 
 static void *acceptDM(void *arg) {
-    int listeningSocket = *(int *)arg;
+    int tmp, listeningSocket = *(int *)arg;
     struct sockaddr_in address; // IP and port number to bind the socket to
     socklen_t addrlen = sizeof(address); // length of address
     
     while (true) {
-        if ((peerSocket = accept(listeningSocket, (struct sockaddr*)&address, &addrlen)) < 0) {
+        if ((tmp = accept(listeningSocket, (struct sockaddr*)&address, &addrlen)) < 0) {
             fprintf(stderr, RED("[ERROR]")" Accepting connection failed\n");
             continue;
         }
+        
+        pthread_mutex_lock(&mutex);
+        if (DMOngoing) {
+            readMessage(tmp, NULL);
+            sendMessage(tmp, "nob");
+            shutdown(tmp, SHUT_WR);  // Finish sending, tell peer “no more data”
+            close(tmp);
+            pthread_mutex_unlock(&mutex);
+            continue;
+        }
+        pthread_mutex_unlock(&mutex);
+
+        peerSocket = tmp;
         readMessage(peerSocket, currentPeerID);
         printf("\n[INCOMING] %s wants to chat, accept? [accept](30s)\n", currentPeerID);
         printf(BOLD("%s> "), currentUserID);
@@ -351,18 +369,17 @@ static void *acceptDM(void *arg) {
             int ret = pthread_cond_timedwait(&readyToAccept, &mutex, &ts);
             if (ret == ETIMEDOUT) {
                 sendMessage(peerSocket, "no");
-                currentPeerID[0] = '\0';
                 close(peerSocket);
                 peerSocket = -1;
-                pendingRequest = false;
                 break;
             }
         }
-      
-        while (DMOngoing) {
-            pthread_cond_wait(&readyToAccept, &mutex);
-        }
+        acceptSignal = false;
         pendingRequest = false;
+
+//        while (DMOngoing) {
+//            pthread_cond_wait(&readyToAccept, &mutex);
+//        }
         pthread_mutex_unlock(&mutex);
     }
     
@@ -377,6 +394,8 @@ static void oneToOneChat(void) {
     
     if (strcmp(response, "no") == 0) {
         printf(YELLOW("Peer did not accept DM request :(\n"));
+    } else if (strcmp(response, "nob") == 0) {
+        printf(YELLOW("Peer busy, please try again later.\n"));
     } else {
         char inputBuffer[BUFFERSIZE] = {0}; // buffer for user input
         
@@ -418,7 +437,7 @@ static void *recvMessage(void *arg) {
             currentPeerID[0] = '\0';
             close(peerSocket);
             peerSocket = -1;
-            printf("\n"YELLOW("Peer had left.")"\n"BOLD("%s> "), currentUserID);
+            printf("\n"YELLOW("Peer had left. (Hit enter to continue)\n"));
             break;
         } else {
             printf("\n"BBLUE("%s:")" ", currentPeerID);
@@ -490,7 +509,7 @@ static int setListeningSocket(int listeningSocket, int listeningPort) {
     }
     
     // Listen for connections
-    int maxWaitingToConnect = 10;
+    int maxWaitingToConnect = 0;
     if (listen(listeningSocket, maxWaitingToConnect) < 0) {
         perror(RED("[ERROR]")" Listening for connection failed\n");
         exit(EXIT_FAILURE);
