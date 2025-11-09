@@ -299,6 +299,7 @@ int main(int argc, char const* argv[]) {
             sendMessage(peerSocket, "yes");
             
             // Start chat session
+            printf(YELLOW("Entering chat...\n"));
             oneToOneChat();
             printf(YELLOW("...chat with %s ended\n"), currentPeerID);
             close(peerSocket);
@@ -381,6 +382,7 @@ static void *acceptDM(void *arg) {
                 sendMessage(peerSocket, "no");
                 shutdown(peerSocket, SHUT_WR);
                 close(peerSocket);
+                currentPeerID[0] = '\0';
                 peerSocket = -1;
                 break;
             }
@@ -415,6 +417,7 @@ static void oneToOneChat(void) {
     WINDOW *messageWindow = newwin(rows - 2, cols, 0, 0);
     WINDOW *inputWindow = newwin(1, cols, rows - 1, 0);
     WINDOW *statusWindow = newwin(1, cols, rows - 2, 0);
+    wbkgd(statusWindow, A_REVERSE | COLOR_PAIR(3));
     scrollok(messageWindow, TRUE);
     idlok(messageWindow, TRUE);
     
@@ -442,9 +445,7 @@ static void oneToOneChat(void) {
     
     // Draw Status bar
     werase(statusWindow);
-    wattron(statusWindow, A_REVERSE | COLOR_PAIR(3));
     mvwprintw(statusWindow, 0, 0, " Chatting with %s | Press ESC to leave ", currentPeerID);
-    wattroff(statusWindow, A_REVERSE | COLOR_PAIR(3));
     pthread_mutex_lock(&drawWindow);
     wrefresh(statusWindow);
     pthread_mutex_unlock(&drawWindow);
@@ -465,7 +466,9 @@ static void oneToOneChat(void) {
         inputCharacter = wgetch(inputWindow);
         if (inputCharacter == 27) { // ESC key
             break;
-        } else if (inputCharacter == '\n') { // input with \n as ending
+        } else if (peerSocket < 0) {
+            continue;
+        }else if (inputCharacter == '\n') { // input with \n as ending
             if (pos > 0) {
                 inputBuffer[pos] = '\0';
                 
@@ -490,9 +493,7 @@ static void oneToOneChat(void) {
         
         // Draw Status bar
         werase(statusWindow);
-        wattron(statusWindow, A_REVERSE | COLOR_PAIR(3));
         mvwprintw(statusWindow, 0, 0, " Chatting with %s | Press ESC to leave ", currentPeerID);
-        wattroff(statusWindow, A_REVERSE | COLOR_PAIR(3));
         pthread_mutex_lock(&drawWindow);
         wrefresh(statusWindow);
         pthread_mutex_unlock(&drawWindow);
@@ -507,7 +508,11 @@ static void oneToOneChat(void) {
         wrefresh(inputWindow);
         pthread_mutex_unlock(&drawWindow);
     }
-    sendMessage(peerSocket, "CLOSEDM");
+    
+    if (peerSocket > 0) {
+        sendMessage(peerSocket, "CLOSEDM");
+    }
+    
     
     // Cancel the message recieving thread
     pthread_cancel(messageReciever);
@@ -524,7 +529,6 @@ static void *recvMessage(void *arg) {
         readMessage(peerSocket, recvBuffer);
         
         if (strcmp(recvBuffer, "CLOSEDM") == 0) {
-            currentPeerID[0] = '\0';
             close(peerSocket);
             peerSocket = -1;
             
