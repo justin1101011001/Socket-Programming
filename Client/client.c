@@ -439,16 +439,10 @@ static void oneToOneChat(void) {
     // Draw essage area
     werase(messageWindow);
     wprintw(messageWindow, "");
-    pthread_mutex_lock(&drawWindow);
-    wrefresh(messageWindow);
-    pthread_mutex_unlock(&drawWindow);
     
     // Draw Status bar
     werase(statusWindow);
     mvwprintw(statusWindow, 0, 0, " Chatting with %s | Press ESC to leave ", currentPeerID);
-    pthread_mutex_lock(&drawWindow);
-    wrefresh(statusWindow);
-    pthread_mutex_unlock(&drawWindow);
 
     // Draw input field
     werase(inputWindow);
@@ -457,7 +451,11 @@ static void oneToOneChat(void) {
     wattroff(inputWindow, COLOR_PAIR(1));
     curs_set(1); // Show cursor
     wmove(inputWindow, 0, pos + 2 + currentUserIDLength); // Move cursor to inputWindow
+    
+    // Refresh
     pthread_mutex_lock(&drawWindow);
+    wrefresh(messageWindow);
+    wrefresh(statusWindow);
     wrefresh(inputWindow);
     pthread_mutex_unlock(&drawWindow);
     
@@ -494,9 +492,6 @@ static void oneToOneChat(void) {
         // Draw Status bar
         werase(statusWindow);
         mvwprintw(statusWindow, 0, 0, " Chatting with %s | Press ESC to leave ", currentPeerID);
-        pthread_mutex_lock(&drawWindow);
-        wrefresh(statusWindow);
-        pthread_mutex_unlock(&drawWindow);
 
         // Draw input field
         werase(inputWindow);
@@ -504,15 +499,17 @@ static void oneToOneChat(void) {
         mvwprintw(inputWindow, 0, 0, "%s> %s", currentUserID, inputBuffer);
         wattroff(inputWindow, COLOR_PAIR(1));
         wmove(inputWindow, 0, pos + 2 + currentUserIDLength);
+        
+        // Refresh
         pthread_mutex_lock(&drawWindow);
+        wrefresh(statusWindow);
         wrefresh(inputWindow);
         pthread_mutex_unlock(&drawWindow);
     }
     
-    if (peerSocket > 0) {
+    if (peerSocket > 0) { // Initiate termination from this side
         sendMessage(peerSocket, "CLOSEDM");
     }
-    
     
     // Cancel the message recieving thread
     pthread_cancel(messageReciever);
