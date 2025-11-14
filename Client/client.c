@@ -399,6 +399,7 @@ static void *acceptDM(void *arg) { // Thread function to constantly listen for p
     return NULL;
 }
 
+char prevTimestamp[20] ; // Store previous time stamp
 static void oneToOneChat(void) {
     // UI setup
     initscr();
@@ -460,6 +461,12 @@ static void oneToOneChat(void) {
     wrefresh(inputWindow);
     pthread_mutex_unlock(&drawWindow);
     
+    char timestamp[20];
+    time_t now = time(NULL) - 60; // -60 to trigger the first message
+    struct tm *t = localtime(&now);
+    strftime(prevTimestamp, sizeof(prevTimestamp), "%a %b %d %H:%M", t);
+    int curY, curX; // Record cursor position, used for printing timestamp at the correct position
+    
     // Keep reading user input and send them
     while (true) {
         inputCharacter = wgetch(inputWindow);
@@ -467,7 +474,7 @@ static void oneToOneChat(void) {
             break;
         } else if (peerSocket < 0) { // Peer has left
             continue;
-        } else if (inputCharacter == '\n') { // input with \n as ending
+        } else if (inputCharacter == '\n') { // Input with \n as ending
             if (pos > 0) { // User has input something
                 inputBuffer[pos] = '\0';
                 
@@ -478,8 +485,25 @@ static void oneToOneChat(void) {
                     wprintw(messageWindow, "%s:\n", currentUserID);
                     strcpy(lastMessageSentBy, currentUserID);
                 }
-                wprintw(messageWindow, " %s\n", inputBuffer);
+                
+                wprintw(messageWindow, " %s", inputBuffer); // Print message
                 wattroff(messageWindow, COLOR_PAIR(1));
+                
+                // Print timestamp
+                now = time(NULL);
+                t = localtime(&now);
+                strftime(timestamp, sizeof(timestamp), "%a %b %d %H:%M", t);
+                if (strcmp(prevTimestamp, timestamp) != 0) {
+                    getyx(messageWindow, curY, curX); // Get cursor position after message is printed
+                    int startCol = cols - (int)strlen(timestamp) - 1;
+                    wattron(messageWindow, A_DIM);
+                    mvwprintw(messageWindow, curY, startCol, "%s", timestamp);
+                    wattroff(messageWindow, A_DIM);
+                    
+                    strcpy(prevTimestamp, timestamp);
+                }
+                wprintw(messageWindow, "\n");
+                
                 pthread_mutex_lock(&drawWindow);
                 wrefresh(messageWindow);
                 pthread_mutex_unlock(&drawWindow);
@@ -527,6 +551,14 @@ static void *recvMessage(void *arg) {
     WindowPair threadData = *(WindowPair *)arg;
     char recvBuffer[BUFFERSIZE] = ""; // buffer for messages from peer
     
+    int cols = getmaxx(stdscr);
+    
+    char timestamp[20];
+    time_t now = time(NULL) - 60; // -60 to trigger the first message
+    struct tm *t = localtime(&now);
+    strftime(prevTimestamp, sizeof(prevTimestamp), "%a %b %d %H:%M", t);
+    int curY, curX; // Record cursor position, used for printing timestamp at the correct position
+    
     while (true) {
         readMessage(peerSocket, recvBuffer);
         
@@ -548,8 +580,25 @@ static void *recvMessage(void *arg) {
                 wprintw(threadData.message, "%s:\n", currentPeerID);
                 strcpy(lastMessageSentBy, currentPeerID);
             }
-            wprintw(threadData.message, " %s\n", recvBuffer);
+            
+            wprintw(threadData.message, " %s", recvBuffer); // Print message
             wattroff(threadData.message, COLOR_PAIR(2));
+            
+            // Print timestamp
+            now = time(NULL);
+            t = localtime(&now);
+            strftime(timestamp, sizeof(timestamp), "%a %b %d %H:%M", t);
+            if (strcmp(prevTimestamp, timestamp) != 0) {
+                getyx(threadData.message, curY, curX); // Get cursor position after message is printed
+                int startCol = cols - (int)strlen(timestamp) - 1;
+                wattron(threadData.message, A_DIM);
+                mvwprintw(threadData.message, curY, startCol, "%s", timestamp);
+                wattroff(threadData.message, A_DIM);
+                
+                strcpy(prevTimestamp, timestamp);
+            }
+            wprintw(threadData.message, "\n");
+            
             pthread_mutex_lock(&drawWindow);
             wrefresh(threadData.message);
             wrefresh(threadData.input);
