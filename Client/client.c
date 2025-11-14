@@ -439,25 +439,27 @@ static void oneToOneChat(void) {
     int inputCharacter;
     
     // Draw message area
+    pthread_mutex_lock(&drawWindow);
     werase(messageWindow);
     wprintw(messageWindow, "");
+    wrefresh(messageWindow);
+    pthread_mutex_unlock(&drawWindow);
     
     // Draw status bar
+    pthread_mutex_lock(&drawWindow);
     werase(statusWindow);
     mvwprintw(statusWindow, 0, 0, " Chatting with %s | Press ESC to leave ", currentPeerID);
+    wrefresh(statusWindow);
+    pthread_mutex_unlock(&drawWindow);
 
     // Draw input field
+    pthread_mutex_lock(&drawWindow);
     werase(inputWindow);
     wattron(inputWindow, COLOR_PAIR(1));
     mvwprintw(inputWindow, 0, 0, "%s> %s", currentUserID, inputBuffer);
     wattroff(inputWindow, COLOR_PAIR(1));
     curs_set(1); // Show cursor
     wmove(inputWindow, 0, pos + 2 + currentUserIDLength); // Move cursor to inputWindow
-    
-    // Refresh
-    pthread_mutex_lock(&drawWindow);
-    wrefresh(messageWindow);
-    wrefresh(statusWindow);
     wrefresh(inputWindow);
     pthread_mutex_unlock(&drawWindow);
     
@@ -480,6 +482,8 @@ static void oneToOneChat(void) {
                 
                 // Display & send message
                 sendMessage(peerSocket, inputBuffer);
+                
+                pthread_mutex_lock(&drawWindow);
                 wattron(messageWindow, COLOR_PAIR(1));
                 if (strcmp(lastMessageSentBy, currentUserID) != 0) { // Last message not sent by current user, print message sender
                     wprintw(messageWindow, "%s:\n", currentUserID);
@@ -503,8 +507,6 @@ static void oneToOneChat(void) {
                     strcpy(prevTimestamp, timestamp);
                 }
                 wprintw(messageWindow, "\n");
-                
-                pthread_mutex_lock(&drawWindow);
                 wrefresh(messageWindow);
                 pthread_mutex_unlock(&drawWindow);
                 pos = 0;
@@ -519,19 +521,19 @@ static void oneToOneChat(void) {
         }
         
         // Draw Status bar
+        pthread_mutex_lock(&drawWindow);
         werase(statusWindow);
         mvwprintw(statusWindow, 0, 0, " Chatting with %s | Press ESC to leave ", currentPeerID);
+        wrefresh(statusWindow);
+        pthread_mutex_unlock(&drawWindow);
 
         // Draw input field
+        pthread_mutex_lock(&drawWindow);
         werase(inputWindow);
         wattron(inputWindow, COLOR_PAIR(1));
         mvwprintw(inputWindow, 0, 0, "%s> %s", currentUserID, inputBuffer);
         wattroff(inputWindow, COLOR_PAIR(1));
         wmove(inputWindow, 0, pos + 2 + currentUserIDLength);
-        
-        // Refresh
-        pthread_mutex_lock(&drawWindow);
-        wrefresh(statusWindow);
         wrefresh(inputWindow);
         pthread_mutex_unlock(&drawWindow);
     }
@@ -566,15 +568,16 @@ static void *recvMessage(void *arg) {
             close(peerSocket);
             peerSocket = -1;
             
+            pthread_mutex_lock(&drawWindow);
             wattron(threadData.message, COLOR_PAIR(3));
             wprintw(threadData.message, "Peer left the chat. (Hit ESC to continue)\n");
             wattroff(threadData.message, COLOR_PAIR(3));
-            pthread_mutex_lock(&drawWindow);
             wrefresh(threadData.message);
             wrefresh(threadData.input);
             pthread_mutex_unlock(&drawWindow);
             break;
         } else {
+            pthread_mutex_lock(&drawWindow);
             wattron(threadData.message, COLOR_PAIR(2));
             if (strcmp(lastMessageSentBy, currentPeerID) != 0) { // Last message not sent by peer, print message sender
                 wprintw(threadData.message, "%s:\n", currentPeerID);
@@ -598,8 +601,6 @@ static void *recvMessage(void *arg) {
                 strcpy(prevTimestamp, timestamp);
             }
             wprintw(threadData.message, "\n");
-            
-            pthread_mutex_lock(&drawWindow);
             wrefresh(threadData.message);
             wrefresh(threadData.input);
             pthread_mutex_unlock(&drawWindow);
