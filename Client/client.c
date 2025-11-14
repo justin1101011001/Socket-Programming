@@ -30,6 +30,7 @@ bool pendingRequest = false; // Flag indicating if there's a pending DM request 
 
 char currentUserID[100] = "";
 char currentPeerID[100] = "";
+char lastMessageSentBy[100] = ""; // Who sent the last message? Used for message window drawing
 
 int peerSocket; // Used for DM with a peer
 
@@ -335,7 +336,7 @@ int main(int argc, char const* argv[]) {
     return 0;
 }
 
-static void *acceptDM(void *arg) {
+static void *acceptDM(void *arg) { // Thread function to constantly listen for peer chat requests
     int tmp, listeningSocket = *(int *)arg;
     struct sockaddr_in address; // IP and port number to bind the socket to
     socklen_t addrlen = sizeof(address); // length of address
@@ -436,11 +437,11 @@ static void oneToOneChat(void) {
     int currentUserIDLength = (int)(strlen(currentUserID));
     int inputCharacter;
     
-    // Draw essage area
+    // Draw message area
     werase(messageWindow);
     wprintw(messageWindow, "");
     
-    // Draw Status bar
+    // Draw status bar
     werase(statusWindow);
     mvwprintw(statusWindow, 0, 0, " Chatting with %s | Press ESC to leave ", currentPeerID);
 
@@ -462,18 +463,22 @@ static void oneToOneChat(void) {
     // Keep reading user input and send them
     while (true) {
         inputCharacter = wgetch(inputWindow);
-        if (inputCharacter == 27) { // ESC key
+        if (inputCharacter == 27) { // ESC key, end chat session
             break;
-        } else if (peerSocket < 0) {
+        } else if (peerSocket < 0) { // Peer has left
             continue;
-        }else if (inputCharacter == '\n') { // input with \n as ending
-            if (pos > 0) {
+        } else if (inputCharacter == '\n') { // input with \n as ending
+            if (pos > 0) { // User has input something
                 inputBuffer[pos] = '\0';
                 
-                // Else display & send message
+                // Display & send message
                 sendMessage(peerSocket, inputBuffer);
                 wattron(messageWindow, COLOR_PAIR(1));
-                wprintw(messageWindow, "%s: %s\n", currentUserID, inputBuffer);
+                if (strcmp(lastMessageSentBy, currentUserID) != 0) { // Last message not sent by current user, print message sender
+                    wprintw(messageWindow, "%s:\n", currentUserID);
+                    strcpy(lastMessageSentBy, currentUserID);
+                }
+                wprintw(messageWindow, " %s\n", inputBuffer);
                 wattroff(messageWindow, COLOR_PAIR(1));
                 pthread_mutex_lock(&drawWindow);
                 wrefresh(messageWindow);
@@ -539,7 +544,11 @@ static void *recvMessage(void *arg) {
             break;
         } else {
             wattron(threadData.message, COLOR_PAIR(2));
-            wprintw(threadData.message, "%s: %s\n", currentPeerID, recvBuffer);
+            if (strcmp(lastMessageSentBy, currentPeerID) != 0) { // Last message not sent by peer, print message sender
+                wprintw(threadData.message, "%s:\n", currentPeerID);
+                strcpy(lastMessageSentBy, currentPeerID);
+            }
+            wprintw(threadData.message, " %s\n", recvBuffer);
             wattroff(threadData.message, COLOR_PAIR(2));
             pthread_mutex_lock(&drawWindow);
             wrefresh(threadData.message);
