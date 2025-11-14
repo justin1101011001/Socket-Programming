@@ -20,4 +20,4 @@ You can also type ``help`` in the client program to view this list.
 # Additional Information
 - Please only start inputting when you see the prompt ``>``. 
 - Each command should be no more than 1,024 characters long.
-- While in the chat session UI, message length is limited to the window size width at the time of UI launch. Additionally, message might be over written by time stamp if too long.
+- While in the chat session UI, the input field will scroll if the message is longer than the current window size, the message will still be sent in whole. The maximum length of one message should still be less than 1,024 characters long.
