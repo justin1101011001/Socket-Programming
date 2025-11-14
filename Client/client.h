@@ -32,6 +32,7 @@
 typedef struct windowPair {
     WINDOW *message;
     WINDOW *input;
+    WINDOW *time;
 } WindowPair;
 
 static int connectToServer(int clientSocket);
