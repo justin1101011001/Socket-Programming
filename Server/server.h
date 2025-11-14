@@ -64,5 +64,6 @@ static void *consoleWatcher(void *arg);
 static void cleanUp(void);
 static void saveUsers(char *fileName);
 static void readUsers(char *fileName);
+static int directoryExists(const char *path);
 
 #endif /* server_h */

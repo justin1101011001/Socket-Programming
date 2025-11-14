@@ -1,7 +1,9 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <sys/types.h>
 #include <arpa/inet.h>
 #include <stdatomic.h>
+#include <sys/stat.h>
 #include <stdbool.h>
 #include <pthread.h>
 #include <stdlib.h>
@@ -647,7 +649,11 @@ static void saveUsers(char *fileName) {
 }
 
 static void readUsers(char *fileName) {
-    FILE *file = fopen(fileName, "rb");
+    if (!directoryExists("./Data")) {
+        mkdir("./Data", 0755);
+    }
+    
+    FILE *file = fopen(fileName, "w+b");
     if (!file) {
         perror(RED("[ERROR]")" Failed to open file to read registered users\n");
         return;
@@ -684,4 +690,12 @@ static void readUsers(char *fileName) {
     fclose(file);
     fprintf(stderr, MAGENTA("[LOG]")" Read registered user list from file\n");
     return;
+}
+
+static int directoryExists(const char *path) {
+    struct stat st;
+    if (stat(path, &st) == 0) {
+        return S_ISDIR(st.st_mode);  // true if it's a directory
+    }
+    return 0;  // stat() failed → doesn't exist (or can't be accessed)
 }
