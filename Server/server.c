@@ -653,11 +653,12 @@ static void readUsers(char *fileName) {
         mkdir("./Data", 0755);
     }
     
-    FILE *file = fopen(fileName, "w+b");
+    FILE *file = fopen(fileName, "a+b");
     if (!file) {
         perror(RED("[ERROR]")" Failed to open file to read registered users\n");
         return;
     }
+    fseek(file, 0, SEEK_SET);
     
     while (1) {
         User *newUser = malloc(sizeof(User));
