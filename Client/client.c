@@ -16,6 +16,7 @@
 
 #define SERVERPORT 12014
 #define BUFFERSIZE 1024
+#define TIMEWINDOWWIDTH 18
 
 static pthread_t messageReciever;
 static pthread_t DMAcceptor;
@@ -399,7 +400,7 @@ static void *acceptDM(void *arg) { // Thread function to constantly listen for p
     return NULL;
 }
 
-char prevTimestamp[18] ; // Store previous time stamp
+char prevTimestamp[TIMEWINDOWWIDTH] ; // Store previous time stamp
 static void oneToOneChat(void) {
     // UI setup
     initscr();
@@ -416,10 +417,10 @@ static void oneToOneChat(void) {
     int rows, cols;
     getmaxyx(stdscr, rows, cols);
     
-    WINDOW *messageWindow = newwin(rows - 2, cols - 18, 0, 0); // Rows 0 ~ (rows - 3), Columns 0 ~ (cols - 21)
+    WINDOW *messageWindow = newwin(rows - 2, cols - TIMEWINDOWWIDTH, 0, 0); // Rows 0 ~ (rows - 3), Columns 0 ~ (cols - 21)
     WINDOW *inputWindow = newwin(1, cols, rows - 1, 0);
     WINDOW *statusWindow = newwin(1, cols, rows - 2, 0);
-    WINDOW *timeWindow = newwin(rows - 2, 18, 0, cols - 18);
+    WINDOW *timeWindow = newwin(rows - 2, TIMEWINDOWWIDTH, 0, cols - TIMEWINDOWWIDTH);
     wbkgd(statusWindow, A_REVERSE | COLOR_PAIR(3));
     wbkgd(timeWindow, A_DIM);
     scrollok(messageWindow, TRUE);
@@ -477,7 +478,7 @@ static void oneToOneChat(void) {
     wrefresh(inputWindow);
     pthread_mutex_unlock(&drawWindow);
     
-    char timestamp[18];
+    char timestamp[TIMEWINDOWWIDTH];
     time_t now = time(NULL) - 60; // -60 to trigger the first message
     struct tm *t = localtime(&now);
     strftime(prevTimestamp, sizeof(prevTimestamp), "%a %b %d %H:%M", t);
@@ -519,6 +520,10 @@ static void oneToOneChat(void) {
                 } else {
                     wprintw(timeWindow, "\n");
                 }
+                for (int i = 0; i < pos / (cols - TIMEWINDOWWIDTH - 3); i++) {
+                    wprintw(timeWindow, "\n");
+                }
+                
                 wrefresh(timeWindow);
                 wrefresh(messageWindow);
                 pthread_mutex_unlock(&drawWindow);
@@ -566,11 +571,12 @@ static void *recvMessage(void *arg) {
     WindowPair threadData = *(WindowPair *)arg;
     char recvBuffer[BUFFERSIZE] = ""; // buffer for messages from peer
     
-    char timestamp[18];
+    char timestamp[TIMEWINDOWWIDTH];
     time_t now = time(NULL) - 60; // -60 to trigger the first message
     struct tm *t = localtime(&now);
     strftime(prevTimestamp, sizeof(prevTimestamp), "%a %b %d %H:%M", t);
     
+    int cols = getmaxx(stdscr);
     while (true) {
         readMessage(peerSocket, recvBuffer);
         
@@ -608,6 +614,9 @@ static void *recvMessage(void *arg) {
                 wprintw(threadData.time, " %s\n", timestamp);
                 strcpy(prevTimestamp, timestamp);
             } else {
+                wprintw(threadData.time, "\n");
+            }
+            for (int i = 0; i < strlen(recvBuffer) / (cols - TIMEWINDOWWIDTH - 3); i++) {
                 wprintw(threadData.time, "\n");
             }
             
