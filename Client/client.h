@@ -40,7 +40,7 @@ static int setListeningSocket(int listeningSocket, int listeningPort);
 static int sendMessage(int socket, char *buffer);
 static void readMessage(int socket, char *buffer);
 static int parseInput(char *token, char *buffer, char (*input)[BUFFERSIZE]);
-static int setListeingPort(int argc, const char **argv);
+static int setListeningPort(int argc, const char **argv);
 static void oneToOneChat(void);
 static void *recvMessage(void *arg);
 static void *acceptDM(void *arg);

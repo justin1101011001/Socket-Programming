@@ -11,6 +11,8 @@
 #include <unistd.h>
 #include <signal.h>
 #include <stdio.h>
+#include <errno.h>
+#include <poll.h>
 
 #include "server.h"
 
@@ -37,7 +39,7 @@ JobQueue job_queue;
 
 // For server shutdown
 static volatile sig_atomic_t shuttingDown = 0;
-static int serverSocketGlobal = -1; // store listening socket globally
+static int serverSocketGlobal = -1; // Store listening socket globally
 
 static pthread_t workerThreads[THREAD_POOL_SIZE];
 static pthread_t consoleThread;
@@ -54,15 +56,39 @@ int main(int argc, char const* argv[]) {
     
     while (!shuttingDown) { // Keep listening for new connections
         fprintf(stderr, MAGENTA("[LOG]")" Listening for connections\n");
-        perClientSocket = acceptConnection(perClientSocket, serverSocket); // Accept connections
-        if (perClientSocket < 0) {
-            if (shuttingDown) {
-                break; // expected during shutdown
-            } else {
-                continue; // or break depending on policy
+
+        // Use poll() with a timeout so we can periodically check shuttingDown
+        struct pollfd pfd;
+        pfd.fd = serverSocket;
+        pfd.events = POLLIN;
+        int pollTimeoutMs = 1000; // half a second
+        int pollResult = poll(&pfd, 1, pollTimeoutMs);
+        if (pollResult < 0) {
+            if (errno == EINTR) {
+                // Interrupted by signal; re-check shutdown flag
+                continue;
             }
+            if (shuttingDown) {
+                break;
+            }
+            perror(RED("[ERROR]")" poll failed\n");
+            continue;
+        } else if (pollResult == 0) {
+            // Timeout: loop back and check shuttingDown again
+            continue;
         }
-        queue_push(&job_queue, perClientSocket); // Add accepted client socket to the job queue for worker threads
+
+        if (pfd.revents & POLLIN) {
+            perClientSocket = acceptConnection(perClientSocket, serverSocket); // Accept connections
+            if (perClientSocket < 0) {
+                if (shuttingDown) {
+                    break; // expected during shutdown
+                } else {
+                    continue; // or break depending on policy
+                }
+            }
+            queue_push(&job_queue, perClientSocket); // Add accepted client socket to the job queue for worker threads
+        }
     }
     
     fprintf(stderr, YELLOW("[CONTROL]")" Stopping server, waiting for workers...\n");

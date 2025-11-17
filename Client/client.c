@@ -38,7 +38,7 @@ int peerSocket; // Used for DM with a peer
 
 int main(int argc, char const* argv[]) {
 //MARK: - Socket Setup
-    int listeningPort = setListeingPort(argc, argv); // Get listening port from arguments
+    int listeningPort = setListeningPort(argc, argv); // Get listening port from arguments
     int listeningSocket = 0, clientSocket = 0;
     listeningSocket = setListeningSocket(listeningSocket, listeningPort); // Set listening socket
 
@@ -732,7 +732,7 @@ static int parseInput(char *token, char *buffer, char (*input)[BUFFERSIZE]){
     return parameterIndex;
 }
 
-static int setListeingPort(int argc, const char **argv) {
+static int setListeningPort(int argc, const char **argv) {
     if (argc != 2) {
         printf(RED("Usage: ./client.out <Listening port number>\n"));
         exit(-1);
