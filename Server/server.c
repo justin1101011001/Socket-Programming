@@ -54,19 +54,17 @@ int main(int argc, char const* argv[]) {
     readUsers(registeredUserFile); // Read registered users from file
     createThreads(); // Create worker threads for handling clients and thread for handling shutdown
     
-    while (!shuttingDown) { // Keep listening for new connections
-        //fprintf(stderr, MAGENTA("[LOG]")" Listening for connections\n");
-
+    // poll() parameters
+    struct pollfd pfd;
+    pfd.fd = serverSocket;
+    pfd.events = POLLIN;
+    int pollResult, pollTimeoutMs = 1000; // 1 second
+    while (!shuttingDown) { // Keep polling for new connections
         // Use poll() with a timeout so we can periodically check shuttingDown
-        struct pollfd pfd;
-        pfd.fd = serverSocket;
-        pfd.events = POLLIN;
-        int pollTimeoutMs = 1000; // 1 second
-        int pollResult = poll(&pfd, 1, pollTimeoutMs);
+        pollResult = poll(&pfd, 1, pollTimeoutMs);
         if (pollResult < 0) {
             if (errno == EINTR) {
-                // Interrupted by signal; re-check shutdown flag
-                continue;
+                continue; // Interrupted by signal; re-check shutdown flag
             }
             if (shuttingDown) {
                 break;
@@ -74,18 +72,16 @@ int main(int argc, char const* argv[]) {
             perror(RED("[ERROR]")" poll failed\n");
             continue;
         } else if (pollResult == 0) {
-            // Timeout: loop back and check shuttingDown again
-            continue;
+            continue; // Timeout: loop back and check shuttingDown again
         }
 
-        if (pfd.revents & POLLIN) {
+        if (pfd.revents & POLLIN) { // Incoming connection
             perClientSocket = acceptConnection(perClientSocket, serverSocket); // Accept connections
             if (perClientSocket < 0) {
                 if (shuttingDown) {
                     break; // expected during shutdown
-                } else {
-                    continue; // or break depending on policy
                 }
+                continue;
             }
             queue_push(&job_queue, perClientSocket); // Add accepted client socket to the job queue for worker threads
         }
