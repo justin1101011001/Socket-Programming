@@ -29,12 +29,6 @@
 
 #define BUFFERSIZE 1024
 
-typedef struct windowPair {
-    WINDOW *message;
-    WINDOW *input;
-    WINDOW *time;
-} WindowPair;
-
 static int connectToServer(int clientSocket);
 static int setListeningSocket(int listeningSocket, int listeningPort);
 static int sendMessage(int socket, char *buffer);
@@ -44,5 +38,7 @@ static int setListeningPort(int argc, const char **argv);
 static void oneToOneChat(void);
 static void *recvMessage(void *arg);
 static void *acceptDM(void *arg);
+static void handleWindowResize(int sig);
+static void resizeWindows(void);
 
 #endif /* client_h */

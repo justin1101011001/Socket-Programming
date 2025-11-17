@@ -249,11 +249,13 @@ int main(int argc, char const* argv[]) {
                 
                 if (strcmp(response, "no") == 0) { // Request timed out
                     printf(YELLOW("Peer did not accept DM request :(\n"));
+                    pthread_mutex_lock(&mutex);
                     DMOngoing = false;
                     pthread_mutex_unlock(&mutex);
                     continue;
                 } else if (strcmp(response, "nob") == 0) { // Peer in another chat session already
                     printf(YELLOW("Peer busy, please try again later.\n"));
+                    pthread_mutex_lock(&mutex);
                     DMOngoing = false;
                     pthread_mutex_unlock(&mutex);
                     continue;
@@ -338,6 +340,7 @@ int main(int argc, char const* argv[]) {
     return 0;
 }
 
+//MARK: - DM Logic
 static void *acceptDM(void *arg) { // Thread function to constantly listen for peer chat requests
     int tmp, listeningSocket = *(int *)arg;
     struct sockaddr_in address; // IP and port number to bind the socket to
@@ -401,7 +404,15 @@ static void *acceptDM(void *arg) { // Thread function to constantly listen for p
     return NULL;
 }
 
+#define MAXMESSAGES 100
+#define MAXMSGLEN 1024
+char messageBuffer[MAXMESSAGES][MAXMSGLEN + TIMEWINDOWWIDTH + 1]; // Buffer to store last 100 messages, message | timestamp | 0 self/1 peer X 0 message/1 ID tag
+char chatInputBuffer[BUFFERSIZE] = ""; // buffer for user input
 char prevTimestamp[TIMEWINDOWWIDTH] ; // Store previous time stamp
+int messageCount = 0, oldestMessage = 0; // Number of messages, index of oldest message
+int pos = 0; // Tracks cursor position as user inputs characters
+WINDOW *messageWindow, *inputWindow, *statusWindow, *timeWindow;
+
 static void oneToOneChat(void) {
     // UI setup
     initscr();
@@ -415,70 +426,20 @@ static void oneToOneChat(void) {
     init_pair(2, COLOR_BLUE, -1); // Blue text on default background
     init_pair(3, COLOR_YELLOW, -1); // Yellow text on default background
     
-    int rows, cols;
-    getmaxyx(stdscr, rows, cols);
+    int cols = getmaxx(stdscr);
+    resizeWindows(); // Create windows
     
-    WINDOW *messageWindow = newwin(rows - 2, cols - TIMEWINDOWWIDTH, 0, 0); // Rows 0 ~ (rows - 3), Columns 0 ~ (cols - 21)
-    WINDOW *inputWindow = newwin(1, cols, rows - 1, 0);
-    WINDOW *statusWindow = newwin(1, cols, rows - 2, 0);
-    WINDOW *timeWindow = newwin(rows - 2, TIMEWINDOWWIDTH, 0, cols - TIMEWINDOWWIDTH);
-    wbkgd(statusWindow, A_REVERSE | COLOR_PAIR(3));
-    wbkgd(timeWindow, A_DIM);
-    scrollok(messageWindow, TRUE);
-    idlok(messageWindow, TRUE);
-    scrollok(timeWindow, TRUE);
-    idlok(timeWindow, TRUE);
-    scrollok(inputWindow, TRUE);
-    idlok(inputWindow, TRUE);
-    
-    WindowPair threadData;
-    threadData.message = messageWindow;
-    threadData.input = inputWindow;
-    threadData.time = timeWindow;
     // Create message reciever thread for chat
-    if (pthread_create(&messageReciever, NULL, recvMessage, &threadData) != 0) {
+    if (pthread_create(&messageReciever, NULL, recvMessage, NULL) != 0) {
         perror(RED("[ERROR]")" Failed to create message reciever thread\n");
         endwin();
         exit(EXIT_FAILURE);
     }
     
-    char inputBuffer[BUFFERSIZE] = ""; // buffer for user input
-    int pos = 0;
-    int currentUserIDLength = (int)(strlen(currentUserID));
+    // Set up resize handler
+    signal(SIGWINCH, handleWindowResize);
+    
     int inputCharacter;
-    
-    // Draw message area
-    pthread_mutex_lock(&drawWindow);
-    werase(messageWindow);
-    wprintw(messageWindow, "");
-    wrefresh(messageWindow);
-    pthread_mutex_unlock(&drawWindow);
-    
-    // Draw timestamp area
-    pthread_mutex_lock(&drawWindow);
-    werase(timeWindow);
-    wprintw(timeWindow, "");
-    wrefresh(timeWindow);
-    pthread_mutex_unlock(&drawWindow);
-    
-    // Draw status bar
-    pthread_mutex_lock(&drawWindow);
-    werase(statusWindow);
-    mvwprintw(statusWindow, 0, 0, " Chatting with %s | Press ESC to leave ", currentPeerID);
-    wrefresh(statusWindow);
-    pthread_mutex_unlock(&drawWindow);
-
-    // Draw input field
-    pthread_mutex_lock(&drawWindow);
-    werase(inputWindow);
-    wattron(inputWindow, COLOR_PAIR(1));
-    mvwprintw(inputWindow, 0, 0, "%s> %s", currentUserID, inputBuffer);
-    wattroff(inputWindow, COLOR_PAIR(1));
-    curs_set(1); // Show cursor
-    wmove(inputWindow, 0, pos + 2 + currentUserIDLength); // Move cursor to inputWindow
-    wrefresh(inputWindow);
-    pthread_mutex_unlock(&drawWindow);
-    
     char timestamp[TIMEWINDOWWIDTH];
     time_t now = time(NULL) - 60; // -60 to trigger the first message
     struct tm *t = localtime(&now);
@@ -493,22 +454,32 @@ static void oneToOneChat(void) {
             continue;
         } else if (inputCharacter == '\n') { // Input with \n as ending
             if (pos > 0) { // User has input something
-                inputBuffer[pos] = '\0';
+                chatInputBuffer[pos] = '\0';
                 
                 // Display & send message
-                sendMessage(peerSocket, inputBuffer);
+                sendMessage(peerSocket, chatInputBuffer);
                 
                 pthread_mutex_lock(&drawWindow);
                 // Print sender
                 wattron(messageWindow, COLOR_PAIR(1));
                 if (strcmp(lastMessageSentBy, currentUserID) != 0) { // Last message not sent by current user, print sender
                     wprintw(messageWindow, "%s:\n", currentUserID);
-                    strcpy(lastMessageSentBy, currentUserID);
                     wprintw(timeWindow, "\n");
+                    strcpy(lastMessageSentBy, currentUserID);
+                    
+                    strcpy(messageBuffer[messageCount], currentUserID); // Store ID tag
+                    strcpy(messageBuffer[messageCount] + MAXMSGLEN, "\n"); // Store timestamp
+                    messageBuffer[messageCount][MAXMSGLEN + TIMEWINDOWWIDTH] = 1; // 01 self tag
+                    messageCount++;
+                    messageCount %= MAXMESSAGES;
+                    if (messageCount == oldestMessage) {
+                        oldestMessage++;
+                        oldestMessage %= MAXMESSAGES;
+                    }
                 }
 
                 // Print message
-                wprintw(messageWindow, " > %s\n", inputBuffer);
+                wprintw(messageWindow, " > %s\n", chatInputBuffer);
                 wattroff(messageWindow, COLOR_PAIR(1));
                 
                 // Print timestamp
@@ -518,11 +489,23 @@ static void oneToOneChat(void) {
                 if (strcmp(prevTimestamp, timestamp) != 0) {
                     wprintw(timeWindow, " %s\n", timestamp);
                     strcpy(prevTimestamp, timestamp);
+                    strcpy(messageBuffer[messageCount] + MAXMSGLEN, timestamp);
                 } else {
                     wprintw(timeWindow, "\n");
+                    strcpy(messageBuffer[messageCount] + MAXMSGLEN, "\n");
                 }
                 for (int i = 0; i < pos / (cols - TIMEWINDOWWIDTH - 3); i++) {
                     wprintw(timeWindow, "\n");
+                }
+    
+                // Update message history
+                strcpy(messageBuffer[messageCount], chatInputBuffer);
+                messageBuffer[messageCount][MAXMSGLEN + TIMEWINDOWWIDTH] = 0; // 00 self message
+                messageCount++;
+                messageCount %= MAXMESSAGES;
+                if (messageCount == oldestMessage) {
+                    oldestMessage++;
+                    oldestMessage %= MAXMESSAGES;
                 }
                 
                 wrefresh(timeWindow);
@@ -530,14 +513,14 @@ static void oneToOneChat(void) {
                 pthread_mutex_unlock(&drawWindow);
                 
                 pos = 0;
-                memset(inputBuffer, 0, sizeof(inputBuffer));
+                memset(chatInputBuffer, 0, sizeof(chatInputBuffer));
             }
         } else if (inputCharacter == KEY_BACKSPACE || inputCharacter == 127) { // Backspace
             if (pos > 0) {
-                inputBuffer[--pos] = '\0';
+                chatInputBuffer[--pos] = '\0';
             }
         } else if (isprint(inputCharacter) && pos < BUFFERSIZE - 1) {
-            inputBuffer[pos++] = inputCharacter;
+            chatInputBuffer[pos++] = inputCharacter;
         }
         
         // Draw Status bar
@@ -551,7 +534,7 @@ static void oneToOneChat(void) {
         pthread_mutex_lock(&drawWindow);
         werase(inputWindow);
         wattron(inputWindow, COLOR_PAIR(1));
-        mvwprintw(inputWindow, 0, 0, "%s> %s", currentUserID, inputBuffer);
+        mvwprintw(inputWindow, 0, 0, "%s> %s", currentUserID, chatInputBuffer);
         wattroff(inputWindow, COLOR_PAIR(1));
         wrefresh(inputWindow);
         pthread_mutex_unlock(&drawWindow);
@@ -569,7 +552,6 @@ static void oneToOneChat(void) {
 }
 
 static void *recvMessage(void *arg) {
-    WindowPair threadData = *(WindowPair *)arg;
     char recvBuffer[BUFFERSIZE] = ""; // buffer for messages from peer
     
     char timestamp[TIMEWINDOWWIDTH];
@@ -577,7 +559,8 @@ static void *recvMessage(void *arg) {
     struct tm *t = localtime(&now);
     strftime(prevTimestamp, sizeof(prevTimestamp), "%a %b %d %H:%M", t);
     
-    int cols = getmaxx(stdscr);
+    int messageWindowWidth = getmaxx(messageWindow);
+    
     while (true) {
         readMessage(peerSocket, recvBuffer);
         
@@ -586,44 +569,66 @@ static void *recvMessage(void *arg) {
             peerSocket = -1;
             
             pthread_mutex_lock(&drawWindow);
-            wattron(threadData.message, COLOR_PAIR(3));
-            wprintw(threadData.message, "Peer left the chat. (Hit ESC to continue)\n");
-            wattroff(threadData.message, COLOR_PAIR(3));
-            wrefresh(threadData.message);
-            wrefresh(threadData.input);
+            wattron(messageWindow, COLOR_PAIR(3));
+            wprintw(messageWindow, "Peer left the chat. (Hit ESC to continue)\n");
+            wattroff(messageWindow, COLOR_PAIR(3));
+            wrefresh(messageWindow);
+            wrefresh(inputWindow);
             pthread_mutex_unlock(&drawWindow);
             break;
         } else {
             pthread_mutex_lock(&drawWindow);
             // Print sender
-            wattron(threadData.message, COLOR_PAIR(2));
+            wattron(messageWindow, COLOR_PAIR(2));
             if (strcmp(lastMessageSentBy, currentPeerID) != 0) { // Last message not sent by peer, print sender
-                wprintw(threadData.message, "%s:\n", currentPeerID);
+                wprintw(messageWindow, "%s:\n", currentPeerID);
+                wprintw(timeWindow, "\n");
                 strcpy(lastMessageSentBy, currentPeerID);
-                wprintw(threadData.time, "\n");
+                
+                strcpy(messageBuffer[messageCount], currentPeerID); // Store ID tag
+                strcpy(messageBuffer[messageCount] + MAXMSGLEN, "\n"); // Store timestamp
+                messageBuffer[messageCount][MAXMSGLEN + TIMEWINDOWWIDTH] = 3; // 11 peer ID tag
+                messageCount++;
+                messageCount %= MAXMESSAGES;
+                if (messageCount == oldestMessage) {
+                    oldestMessage++;
+                    oldestMessage %= MAXMESSAGES;
+                }
             }
 
             // Print message
-            wprintw(threadData.message, " > %s\n", recvBuffer);
-            wattroff(threadData.message, COLOR_PAIR(2));
+            wprintw(messageWindow, " > %s\n", recvBuffer);
+            wattroff(messageWindow, COLOR_PAIR(2));
 
             // Print timestamp
             now = time(NULL);
             t = localtime(&now);
             strftime(timestamp, sizeof(timestamp), "%a %b %d %H:%M", t);
             if (strcmp(prevTimestamp, timestamp) != 0) {
-                wprintw(threadData.time, " %s\n", timestamp);
+                wprintw(timeWindow, " %s\n", timestamp);
                 strcpy(prevTimestamp, timestamp);
+                strcpy(messageBuffer[messageCount] + MAXMSGLEN, timestamp);
             } else {
-                wprintw(threadData.time, "\n");
+                wprintw(timeWindow, "\n");
+                strcpy(messageBuffer[messageCount] + MAXMSGLEN, "\n");
             }
-            for (int i = 0; i < strlen(recvBuffer) / (cols - TIMEWINDOWWIDTH - 3); i++) {
-                wprintw(threadData.time, "\n");
+            for (int i = 0; i < strlen(recvBuffer) / (messageWindowWidth - 3); i++) {
+                wprintw(timeWindow, "\n");
             }
             
-            wrefresh(threadData.time);
-            wrefresh(threadData.message);
-            wrefresh(threadData.input);
+            // Update message history
+            strcpy(messageBuffer[messageCount], recvBuffer);
+            messageBuffer[messageCount][MAXMSGLEN + TIMEWINDOWWIDTH] = 2; // 10 peer message
+            messageCount++;
+            messageCount %= MAXMESSAGES;
+            if (messageCount == oldestMessage) {
+                oldestMessage++;
+                oldestMessage %= MAXMESSAGES;
+            }
+            
+            wrefresh(timeWindow);
+            wrefresh(messageWindow);
+            wrefresh(inputWindow);
             pthread_mutex_unlock(&drawWindow);
         }
         
@@ -744,4 +749,91 @@ static int setListeningPort(int argc, const char **argv) {
         exit(-1);
     }
     return listeningPort;
+}
+
+//MARK: - UI Update Logic
+static void handleWindowResize(int sig) {
+    endwin();
+    refresh();
+    clear();
+    resizeWindows();
+    return;
+}
+
+static void resizeWindows(void) {
+    int rows, cols;
+    getmaxyx(stdscr, rows, cols);
+    
+    // Delete old windows if they exist
+    if (messageWindow) delwin(messageWindow);
+    if (statusWindow) delwin(statusWindow);
+    if (inputWindow) delwin(inputWindow);
+    if (timeWindow) delwin(timeWindow);
+    
+    // Create windows
+    messageWindow = newwin(rows - 2, cols - TIMEWINDOWWIDTH, 0, 0); // Rows 0 ~ (rows - 3), Columns 0 ~ (cols - 21)
+    timeWindow = newwin(rows - 2, TIMEWINDOWWIDTH, 0, cols - TIMEWINDOWWIDTH);
+    inputWindow = newwin(1, cols, rows - 1, 0);
+    statusWindow = newwin(1, cols, rows - 2, 0);
+    wbkgd(statusWindow, A_REVERSE | COLOR_PAIR(3));
+    wbkgd(timeWindow, A_DIM);
+    scrollok(messageWindow, TRUE);
+    idlok(messageWindow, TRUE);
+    scrollok(timeWindow, TRUE);
+    idlok(timeWindow, TRUE);
+    scrollok(inputWindow, TRUE);
+    idlok(inputWindow, TRUE);
+    
+    // Draw message area
+    pthread_mutex_lock(&drawWindow);
+    werase(messageWindow);
+    int messageWindowHeight, messageWindowWidth;
+    getmaxyx(messageWindow, messageWindowHeight, messageWindowWidth);
+    int startIndex = (messageCount > messageWindowHeight)? (messageCount - messageWindowHeight) % MAXMESSAGES : oldestMessage;
+    int linesToPrint = (messageCount > messageWindowHeight)? messageWindowHeight : messageCount;
+    for (int i = 0; i < linesToPrint; i++) {
+        if (messageBuffer[(startIndex + i) % MAXMESSAGES][MAXMSGLEN + TIMEWINDOWWIDTH] < 2) { // Self 0x
+            wattron(messageWindow, COLOR_PAIR(1));
+        } else { // Peer 1x
+            wattron(messageWindow, COLOR_PAIR(2));
+        }
+        if (messageBuffer[(startIndex + i) % MAXMESSAGES][MAXMSGLEN + TIMEWINDOWWIDTH] % 2 == 0) { // Message x0
+            wprintw(messageWindow, " > %s\n", messageBuffer[(startIndex + i) % MAXMESSAGES]);
+        } else { // ID tag x1
+            wprintw(messageWindow, "%s:\n", messageBuffer[(startIndex + i) % MAXMESSAGES]);
+        }
+        if (messageBuffer[(startIndex + i) % MAXMESSAGES][MAXMSGLEN + TIMEWINDOWWIDTH] < 2) { // Self 0x
+            wattroff(messageWindow, COLOR_PAIR(1));
+        } else { // Peer 1x
+            wattroff(messageWindow, COLOR_PAIR(2));
+        }
+    }
+    wrefresh(messageWindow);
+    
+    // Draw timestamp area
+    werase(timeWindow);
+    for (int i = startIndex; i < linesToPrint; i++) {
+        wprintw(timeWindow, " %s\n", messageBuffer[(startIndex + i) % MAXMESSAGES] + MAXMSGLEN);
+        for (int j = 0; j < strlen(messageBuffer[(startIndex + i) % MAXMESSAGES]) / (messageWindowWidth - 3); j++) {
+            wprintw(timeWindow, "\n");
+        }
+    }
+    wrefresh(timeWindow);
+    
+    // Draw status bar
+    werase(statusWindow);
+    mvwprintw(statusWindow, 0, 0, " Chatting with %s | Press ESC to leave ", currentPeerID);
+    wrefresh(statusWindow);
+    
+    // Prepare input window
+    werase(inputWindow);
+    wattron(inputWindow, COLOR_PAIR(1));
+    mvwprintw(inputWindow, 0, 0, "%s> %s", currentUserID, chatInputBuffer);
+    wattroff(inputWindow, COLOR_PAIR(1));
+    curs_set(1); // Show cursor
+    wmove(inputWindow, 0, pos + 2 + (int)strlen(currentUserID)); // Move cursor to inputWindow
+    wrefresh(inputWindow);
+    pthread_mutex_unlock(&drawWindow);
+    
+    return;
 }

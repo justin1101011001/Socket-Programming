@@ -53,6 +53,7 @@ int main(int argc, char const* argv[]) {
     serverSocketGlobal = serverSocket;
     readUsers(registeredUserFile); // Read registered users from file
     createThreads(); // Create worker threads for handling clients and thread for handling shutdown
+    fprintf(stderr, MAGENTA("[LOG]")" Start polling for connections\n");
     
     // poll() parameters
     struct pollfd pfd;
