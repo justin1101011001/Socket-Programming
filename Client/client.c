@@ -8,6 +8,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <assert.h>
+#include <signal.h>
 #include <stdio.h>
 #include <errno.h>
 #include <ctype.h>
