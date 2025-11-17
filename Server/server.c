@@ -55,13 +55,13 @@ int main(int argc, char const* argv[]) {
     createThreads(); // Create worker threads for handling clients and thread for handling shutdown
     
     while (!shuttingDown) { // Keep listening for new connections
-        fprintf(stderr, MAGENTA("[LOG]")" Listening for connections\n");
+        //fprintf(stderr, MAGENTA("[LOG]")" Listening for connections\n");
 
         // Use poll() with a timeout so we can periodically check shuttingDown
         struct pollfd pfd;
         pfd.fd = serverSocket;
         pfd.events = POLLIN;
-        int pollTimeoutMs = 1000; // half a second
+        int pollTimeoutMs = 1000; // 1 second
         int pollResult = poll(&pfd, 1, pollTimeoutMs);
         if (pollResult < 0) {
             if (errno == EINTR) {
