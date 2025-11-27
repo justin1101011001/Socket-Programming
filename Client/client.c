@@ -13,7 +13,14 @@
 #include <errno.h>
 #include <ctype.h>
 #include <time.h>
+#include <openssl/err.h>
+#include <openssl/evp.h>
+#include <openssl/rand.h>
+#include <openssl/pem.h>
+#include <openssl/bio.h>
+
 #include "client.h"
+#include "encryption.h"
 
 #define SERVERPORT 12014
 #define BUFFERSIZE 1024
@@ -36,22 +43,33 @@ char lastMessageSentBy[100] = ""; // Who sent the last message? Used for message
 
 int peerSocket; // Used for DM with a peer
 
+// Used for encryption of DM
+unsigned char my_asym_public_key[KEYBYTES]={0};
+EVP_PKEY *asym_key;
+unsigned char chat_sym_key[KEY_LEN]={0};
+
 int main(int argc, char const* argv[]) {
 //MARK: - Socket Setup
     int listeningPort = setListeningPort(argc, argv); // Get listening port from arguments
     int listeningSocket = 0, clientSocket = 0;
     listeningSocket = setListeningSocket(listeningSocket, listeningPort); // Set listening socket
 
-    char recvBuffer[BUFFERSIZE] = {0}; // buffer for messages from server
+    unsigned char recvBuffer[BUFFERSIZE] = {0}; // buffer for messages from server
     char inputBuffer[BUFFERSIZE] = {0}; // buffer for user input
     bool loggedIn = false; // is the user currently logged in
-    
+
     // Create thread to accept DM requests
     if (pthread_create(&DMAcceptor, NULL, acceptDM, &listeningSocket) != 0) {
         perror(RED("[ERROR]")" Failed to create DM acceptor thread\n");
         exit(EXIT_FAILURE);
     }
-    
+
+    unsigned char sym_key[KEY_LEN]={0};
+
+    //generate RSA key for DM
+    asym_key=generate_rsa_key();
+    int w=write_public_key(asym_key, my_asym_public_key, KEYBYTES);
+
     while (true) {
         printf(BOLD("%s> "), currentUserID);
         fflush(stdout);
@@ -62,78 +80,83 @@ int main(int argc, char const* argv[]) {
         if (token == NULL) { // Empty command, continue reading
             continue;
         }
-       
+
 //MARK: - Exit
         if (strcmp(token, "exit") == 0) { // exit and end the client process
             if (loggedIn) {
                 strcpy(token, "logout");
-                sendMessage(clientSocket, token);
-                readMessage(clientSocket, recvBuffer);
+                sendencryptMessage(clientSocket, token, sym_key);
+                readencryptMessage(clientSocket, recvBuffer, sym_key);
                 close(clientSocket);
-                
+
                 loggedIn = false;
                 printf("%s", recvBuffer);
             }
             break;
-            
+
 //MARK: - Logout
         } else if (strcmp(token, "logout") == 0) { // logout put keeps the client process running
             if (!loggedIn) {
                 printf("You are currently not logged in to any account.\n");
                 continue;
             }
-            
-            sendMessage(clientSocket, token);
-            readMessage(clientSocket, recvBuffer);
+
+            sendencryptMessage(clientSocket, token, sym_key);
+            readencryptMessage(clientSocket, recvBuffer, sym_key);
             close(clientSocket);
             currentUserID[0] = '\0';
             loggedIn = false;
             printf("%s", recvBuffer);
-            
+
 //MARK: - Register
         } else if (strcmp(token, "register") == 0) {
             char sendBuffer[BUFFERSIZE] = "";
             int parameterIndex = parseInput(token, sendBuffer, NULL);
-            
+
             if (parameterIndex == 3) { // correct number of parameters
                 if (loggedIn) {
                     printf("You are already logged in to an account, please logout before creating a new account.\n");
                     continue;
                 }
-                
+
                 clientSocket = connectToServer(clientSocket);
                 if (clientSocket < 0) continue;
-                sendMessage(clientSocket, sendBuffer);
-                readMessage(clientSocket, recvBuffer);
+
+                // create symmetric key
+                if (1 != RAND_bytes(sym_key, sizeof(sym_key))) handleErrors("RAND_bytes key failed");
+                exchange_key(sym_key, clientSocket);
+
+                sendencryptMessage(clientSocket, sendBuffer, sym_key);
+                readencryptMessage(clientSocket, recvBuffer, sym_key);
                 close(clientSocket);
                 printf("%s", recvBuffer);
             } else {
                 printf("Invalid parameters.\nUsage: register <ID> <password>\n");
             }
-            
+
 //MARK: - Deregister
         } else if (strcmp(token, "deregister") == 0) {
             if (!loggedIn) { // Can't deregister without logging in
                 printf("Please log in first to start the deregistration process.\n");
                 continue;
             }
-            
+
             char sendBuffer[BUFFERSIZE] = "";
             int parameterIndex = parseInput(token, sendBuffer, NULL);
-            
+
             if (parameterIndex == 2) {
-                sendMessage(clientSocket, sendBuffer); // Send deregistration request
-                readMessage(clientSocket, recvBuffer); // Read comfirmation message
+                sendencryptMessage(clientSocket, sendBuffer, sym_key); // Send deregistration request
+                readencryptMessage(clientSocket, recvBuffer, sym_key); // Read comfirmation message
                 printf("%s", recvBuffer);
-                
+
                 if (strncmp(recvBuffer, "You", 3) == 0) { // Password check passed
                     // User input to confirm deregistration
                     printf(BOLD("%s> "), currentUserID);
                     fgets(inputBuffer, BUFFERSIZE, stdin); // read whole line of input
                     inputBuffer[strcspn(inputBuffer, "\n")] = '\0'; // trim off the newline character at the end
-                    sendMessage(clientSocket, inputBuffer); // Send comfirmation
-                    readMessage(clientSocket, recvBuffer); // Server response
-                    
+                    sendencryptMessage(clientSocket, inputBuffer, sym_key); // Send comfirmation
+                    readencryptMessage(clientSocket, recvBuffer, sym_key); // Server response
+
                     if (strncmp(recvBuffer, "Success", 7) == 0) { // Deregistered successsfully
                         close(clientSocket);
                         currentUserID[0] = '\0';
@@ -145,59 +168,65 @@ int main(int argc, char const* argv[]) {
             } else {
                 printf("Invalid parameters.\nUsage: deregister <password>\n");
             }
-            
+
 //MARK: - Login
         } else if (strcmp(token, "login") == 0) {
             char sendBuffer[BUFFERSIZE] = "";
             char inputTokens[3][BUFFERSIZE] = {0}; // 1 ID, 2 password
             int parameterIndex = parseInput(token, sendBuffer, inputTokens);
-            
+
             if (parameterIndex == 3) { // correct number of parameters
                 if (loggedIn) {
                     printf("You are already logged in to an account, please logout before logging in to another account.\n");
                     continue;
                 }
-                
+
                 clientSocket = connectToServer(clientSocket);
                 if (clientSocket < 0) continue;
-                sendMessage(clientSocket, sendBuffer);
-                readMessage(clientSocket, recvBuffer);
-                
+
+                if (1 != RAND_bytes(sym_key, sizeof(sym_key))) handleErrors("RAND_bytes key failed");
+                exchange_key(sym_key, clientSocket);
+
+                sendencryptMessage(clientSocket, sendBuffer, sym_key);
+                readencryptMessage(clientSocket, recvBuffer, sym_key);
+
                 if (strncmp(recvBuffer, "OK.", 3) == 0) { // if successfully logged in
+                    unsigned char str_format[5]={};
                     int32_t formatted = htons(listeningPort); // Send listening port
-                    send(clientSocket, &formatted, sizeof(int32_t), 0);
+                    memcpy(str_format, &formatted, sizeof(int32_t)); // Transfer port number into string
+                    sendencryptMessage(clientSocket, (char *)str_format, sym_key);
+
                     loggedIn = true;
-                    
                     strcpy(currentUserID, inputTokens[1]); // Add logged in user name to prompt
-                    readMessage(clientSocket, recvBuffer);
+                    readencryptMessage(clientSocket, recvBuffer, sym_key);
                 }
-                
+
                 printf("%s", recvBuffer);
             } else {
                 printf("Invalid parameters.\nUsage: login <ID> <password>\n");
             }
-            
+
 //MARK: - List
         } else if (strcmp(token, "list") == 0) {
             if (!loggedIn) {
                 printf("You are currently not logged in, plaese login to use this feature.\n");
                 continue;
             }
-            
-            sendMessage(clientSocket, token);
-            readMessage(clientSocket, recvBuffer);
+
+            sendencryptMessage(clientSocket, token, sym_key);
+            readencryptMessage(clientSocket, recvBuffer, sym_key);
             printf(GREEN("Online Users\n====================\n"));
             while (strcmp(recvBuffer, "END OF USER LIST") != 0) {
                 printf(GREEN("%s\n"), recvBuffer);
-                readMessage(clientSocket, recvBuffer);
+                readencryptMessage(clientSocket, recvBuffer, sym_key);
             }
-            
+
 //MARK: - DM
         } else if (strcmp(token, "chat") == 0) {
             char sendBuffer[BUFFERSIZE] = "";
             char inputTokens[2][BUFFERSIZE] = {0}; // 1 peerID
             int parameterIndex = parseInput(token, sendBuffer, inputTokens);
-            
+
             if (parameterIndex == 2) { // correct number of parameters
                 if (!loggedIn) {
                     printf("You are currently not logged in, plaese login to use this feature.\n");
@@ -211,20 +240,25 @@ int main(int argc, char const* argv[]) {
                     printf(RED("Cannot have more than one ongoing chat at once.\n"));
                     continue;
                 }
-                
+
                 // Get peer address from server
-                sendMessage(clientSocket, sendBuffer);
-                readMessage(clientSocket, recvBuffer);
+                sendencryptMessage(clientSocket, sendBuffer, sym_key);
+                readencryptMessage(clientSocket, recvBuffer, sym_key);
                 if (strncmp(recvBuffer, "Peer", 4) == 0) { // Peer offline
                     printf("%s", recvBuffer);
                     continue;
                 }
-                
+
                 struct sockaddr_in peerAddress;
                 socklen_t addrlen = sizeof(peerAddress); // length of address
                 peerAddress.sin_family = AF_INET; // address family is IPv4
-                read(clientSocket, &(peerAddress.sin_addr.s_addr), sizeof(in_addr_t));
-                read(clientSocket, &(peerAddress.sin_port), sizeof(in_port_t));
+                unsigned char str_addr[5]={}, str_port[3]={};
+                readencryptMessage(clientSocket, str_addr, sym_key);
+                readencryptMessage(clientSocket, str_port, sym_key);
+                memcpy(&(peerAddress.sin_addr.s_addr), str_addr, sizeof(in_addr_t));
+                memcpy(&(peerAddress.sin_port), str_port, sizeof(in_port_t));
+                //read(clientSocket, &(peerAddress.sin_addr.s_addr), sizeof(in_addr_t));
+                //read(clientSocket, &(peerAddress.sin_port), sizeof(in_port_t));
 
                 // Connect to peer
                 if ((peerSocket = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
@@ -236,17 +270,17 @@ int main(int argc, char const* argv[]) {
                     peerSocket = -1;
                     continue;
                 }
-                
+
                 pthread_mutex_lock(&mutex);
                 DMOngoing = true;
                 pthread_mutex_unlock(&mutex);
-                
+
                 // Wait for peer response
                 char response[3];
                 sendMessage(peerSocket, currentUserID); // Send messaging request
                 printf(YELLOW("Waiting for peer to repond, please wait(10s)...")"\n");
                 readMessage(peerSocket, response);
-                
+
                 if (strcmp(response, "no") == 0) { // Request timed out
                     printf(YELLOW("Peer did not accept DM request :(\n"));
                     pthread_mutex_lock(&mutex);
@@ -260,7 +294,18 @@ int main(int argc, char const* argv[]) {
                     pthread_mutex_unlock(&mutex);
                     continue;
                 }
-                
+
+                // Send RSA public key
+                sendMessage(peerSocket, my_asym_public_key);
+                unsigned char encrypt_text[KEYBYTES]={0};
+                int r=read(peerSocket, encrypt_text, KEYBYTES);
+                printf("encrypt_text(%d):\n", r);
+                for (int i = 0; i<r; ++i) printf("%02x", encrypt_text[i]);
+                printf("\n");
+                int chat_sym_key_len;
+                rsa_decrypt_key(asym_key, encrypt_text, (size_t)r, chat_sym_key, &chat_sym_key_len);
+                sendencryptMessage(peerSocket,"receive key", sym_key);
+
                 // Start chat session
                 printf(YELLOW("Entering chat...\n"));
                 strcpy(currentPeerID, inputTokens[1]);
@@ -269,15 +314,15 @@ int main(int argc, char const* argv[]) {
                 close(peerSocket);
                 peerSocket = -1;
                 currentPeerID[0] = '\0';
-                
+
                 pthread_mutex_lock(&mutex);
                 DMOngoing = false;
                 pthread_mutex_unlock(&mutex);
-                
+
             } else {
                 printf("Invalid parameters.\nUsage: chat <ID>\n");
             }
-            
+
 //MARK: - Accept DM
         } else if (strcmp(token, "accept") == 0){
             if (!loggedIn) {
@@ -292,17 +337,21 @@ int main(int argc, char const* argv[]) {
                 printf(RED("Cannot have more than one ongoing chat at once.\n"));
                 continue;
             }
-            
+
             // Notify acceptDM thread ready to accpet next incoming request
             pthread_mutex_lock(&mutex);
             DMOngoing = true;
             acceptSignal = true;
             pthread_cond_signal(&readyToAccept);
             pthread_mutex_unlock(&mutex);
-            
+
             // Accept DM request
             sendMessage(peerSocket, "yes");
-            
+
+            // create symmetric key
+            RAND_bytes(chat_sym_key, sizeof(chat_sym_key));
+            exchange_key(chat_sym_key, peerSocket);
+
             // Start chat session
             printf(YELLOW("Entering chat...\n"));
             oneToOneChat();
@@ -310,11 +359,11 @@ int main(int argc, char const* argv[]) {
             close(peerSocket);
             peerSocket = -1;
             currentPeerID[0] = '\0';
-            
+
             pthread_mutex_lock(&mutex);
             DMOngoing = false;
             pthread_mutex_unlock(&mutex);
-            
+
 //MARK: - Help
         } else if (strcmp(token, "help") == 0) {
             printf(YELLOW("%-25s")": %-25s\n", "Registration", "register <ID> <password>");
@@ -329,14 +378,14 @@ int main(int argc, char const* argv[]) {
             printf("Unknown command, type \"help\" for usage.\n");
         }
     }
-    
+
     pthread_cancel(DMAcceptor);
     pthread_join(DMAcceptor, NULL);
-    
+
     pthread_mutex_destroy(&mutex);
     pthread_mutex_destroy(&drawWindow);
     pthread_cond_destroy(&readyToAccept);
-    
+
     return 0;
 }
 
@@ -345,14 +394,14 @@ static void *acceptDM(void *arg) { // Thread function to constantly listen for p
     int tmp, listeningSocket = *(int *)arg;
     struct sockaddr_in address; // IP and port number to bind the socket to
     socklen_t addrlen = sizeof(address); // length of address
-    
+
     while (true) {
         // Accept new connection
         if ((tmp = accept(listeningSocket, (struct sockaddr*)&address, &addrlen)) < 0) {
             fprintf(stderr, RED("[ERROR]")" Accepting connection failed\n");
             continue;
         }
-        
+
         // Reject request if a chat session is already in progress
         pthread_mutex_lock(&mutex);
         if (DMOngoing) {
@@ -371,16 +420,16 @@ static void *acceptDM(void *arg) { // Thread function to constantly listen for p
         printf("\n"YELLOW("[INCOMING]")BLUE(" %s")" wants to chat, accept? [accept](10s)\n", currentPeerID);
         printf(BOLD("%s> "), currentUserID);
         fflush(stdout);
-        
+
         // Wait 10 seconds or request accepted
         pthread_mutex_lock(&mutex);
         pendingRequest = true;
-        
+
         // Compute wake-up time (30 seconds from now)
         struct timespec ts;
         clock_gettime(CLOCK_REALTIME, &ts);
         ts.tv_sec += 10;
-        
+
         // Wait for accept or timeout
         while (!acceptSignal) {
             int ret = pthread_cond_timedwait(&readyToAccept, &mutex, &ts);
@@ -393,14 +442,14 @@ static void *acceptDM(void *arg) { // Thread function to constantly listen for p
                 break;
             }
         }
-        
+
         acceptSignal = false;
         pendingRequest = false;
         pthread_mutex_unlock(&mutex);
-        
+
         pthread_testcancel();
     }
-    
+
     return NULL;
 }
 
@@ -421,30 +470,28 @@ static void oneToOneChat(void) {
     keypad(stdscr, TRUE);
     start_color(); // Enable color functionality
     use_default_colors(); // Optional: allow transparency with terminal default background
-    
+
     init_pair(1, COLOR_RED, -1); // Red text on default background
     init_pair(2, COLOR_BLUE, -1); // Blue text on default background
     init_pair(3, COLOR_YELLOW, -1); // Yellow text on default background
-    
+
     int cols = getmaxx(stdscr);
     resizeWindows(); // Create windows
-    
+
     // Create message reciever thread for chat
     if (pthread_create(&messageReciever, NULL, recvMessage, NULL) != 0) {
         perror(RED("[ERROR]")" Failed to create message reciever thread\n");
         endwin();
         exit(EXIT_FAILURE);
     }
-    
     // Set up resize handler
     signal(SIGWINCH, handleWindowResize);
-    
     int inputCharacter;
     char timestamp[TIMEWINDOWWIDTH];
     time_t now = time(NULL) - 60; // -60 to trigger the first message
     struct tm *t = localtime(&now);
     strftime(prevTimestamp, sizeof(prevTimestamp), "%a %b %d %H:%M", t);
-    
+
     // Keep reading user input and send them
     while (true) {
         inputCharacter = wgetch(inputWindow);
@@ -455,10 +502,9 @@ static void oneToOneChat(void) {
         } else if (inputCharacter == '\n') { // Input with \n as ending
             if (pos > 0) { // User has input something
                 chatInputBuffer[pos] = '\0';
-                
+
                 // Display & send message
-                sendMessage(peerSocket, chatInputBuffer);
-                
+                sendencryptMessage(peerSocket, chatInputBuffer, chat_sym_key);
                 pthread_mutex_lock(&drawWindow);
                 // Print sender
                 wattron(messageWindow, COLOR_PAIR(1));
@@ -466,7 +512,6 @@ static void oneToOneChat(void) {
                     wprintw(messageWindow, "%s:\n", currentUserID);
                     wprintw(timeWindow, "\n");
                     strcpy(lastMessageSentBy, currentUserID);
-                    
                     strcpy(messageBuffer[messageCount], currentUserID); // Store ID tag
                     strcpy(messageBuffer[messageCount] + MAXMSGLEN, "\n"); // Store timestamp
                     messageBuffer[messageCount][MAXMSGLEN + TIMEWINDOWWIDTH] = 1; // 01 self tag
@@ -481,7 +526,7 @@ static void oneToOneChat(void) {
                 // Print message
                 wprintw(messageWindow, " > %s\n", chatInputBuffer);
                 wattroff(messageWindow, COLOR_PAIR(1));
-                
+
                 // Print timestamp
                 now = time(NULL);
                 t = localtime(&now);
@@ -497,7 +542,6 @@ static void oneToOneChat(void) {
                 for (int i = 0; i < pos / (cols - TIMEWINDOWWIDTH - 3); i++) {
                     wprintw(timeWindow, "\n");
                 }
-    
                 // Update message history
                 strcpy(messageBuffer[messageCount], chatInputBuffer);
                 messageBuffer[messageCount][MAXMSGLEN + TIMEWINDOWWIDTH] = 0; // 00 self message
@@ -507,11 +551,10 @@ static void oneToOneChat(void) {
                     oldestMessage++;
                     oldestMessage %= MAXMESSAGES;
                 }
-                
                 wrefresh(timeWindow);
                 wrefresh(messageWindow);
                 pthread_mutex_unlock(&drawWindow);
-                
+
                 pos = 0;
                 memset(chatInputBuffer, 0, sizeof(chatInputBuffer));
             }
@@ -522,7 +565,7 @@ static void oneToOneChat(void) {
         } else if (isprint(inputCharacter) && pos < BUFFERSIZE - 1) {
             chatInputBuffer[pos++] = inputCharacter;
         }
-        
+
         // Draw Status bar
         pthread_mutex_lock(&drawWindow);
         werase(statusWindow);
@@ -539,11 +582,11 @@ static void oneToOneChat(void) {
         wrefresh(inputWindow);
         pthread_mutex_unlock(&drawWindow);
     }
-    
+
     if (peerSocket > 0) { // Initiate termination from this side
-        sendMessage(peerSocket, "CLOSEDM");
+        sendencryptMessage(peerSocket, "CLOSEDM", chat_sym_key);
     }
-    
+
     // Cancel the message recieving thread
     pthread_cancel(messageReciever);
     pthread_join(messageReciever, NULL);
@@ -553,21 +596,18 @@ static void oneToOneChat(void) {
 
 static void *recvMessage(void *arg) {
     char recvBuffer[BUFFERSIZE] = ""; // buffer for messages from peer
-    
     char timestamp[TIMEWINDOWWIDTH];
     time_t now = time(NULL) - 60; // -60 to trigger the first message
     struct tm *t = localtime(&now);
     strftime(prevTimestamp, sizeof(prevTimestamp), "%a %b %d %H:%M", t);
-    
     int messageWindowWidth = getmaxx(messageWindow);
-    
     while (true) {
-        readMessage(peerSocket, recvBuffer);
-        
+        readencryptMessage(peerSocket, recvBuffer, chat_sym_key);
+
         if (strcmp(recvBuffer, "CLOSEDM") == 0) {
             close(peerSocket);
             peerSocket = -1;
-            
+
             pthread_mutex_lock(&drawWindow);
             wattron(messageWindow, COLOR_PAIR(3));
             wprintw(messageWindow, "Peer left the chat. (Hit ESC to continue)\n");
@@ -584,7 +624,6 @@ static void *recvMessage(void *arg) {
                 wprintw(messageWindow, "%s:\n", currentPeerID);
                 wprintw(timeWindow, "\n");
                 strcpy(lastMessageSentBy, currentPeerID);
-                
                 strcpy(messageBuffer[messageCount], currentPeerID); // Store ID tag
                 strcpy(messageBuffer[messageCount] + MAXMSGLEN, "\n"); // Store timestamp
                 messageBuffer[messageCount][MAXMSGLEN + TIMEWINDOWWIDTH] = 3; // 11 peer ID tag
@@ -615,7 +654,6 @@ static void *recvMessage(void *arg) {
             for (int i = 0; i < strlen(recvBuffer) / (messageWindowWidth - 3); i++) {
                 wprintw(timeWindow, "\n");
             }
-            
             // Update message history
             strcpy(messageBuffer[messageCount], recvBuffer);
             messageBuffer[messageCount][MAXMSGLEN + TIMEWINDOWWIDTH] = 2; // 10 peer message
@@ -625,13 +663,12 @@ static void *recvMessage(void *arg) {
                 oldestMessage++;
                 oldestMessage %= MAXMESSAGES;
             }
-            
             wrefresh(timeWindow);
             wrefresh(messageWindow);
             wrefresh(inputWindow);
             pthread_mutex_unlock(&drawWindow);
         }
-        
+
         pthread_testcancel();
     }
     return NULL;
@@ -641,36 +678,36 @@ static void *recvMessage(void *arg) {
 static int connectToServer(int clientSocket) {
     struct sockaddr_in serverAddress; // IP and port number to bind the socket to
     socklen_t addrlen = sizeof(serverAddress); // length of address
-    
+
     // Create socket file descriptor
     if ((clientSocket = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
         perror(RED("Socket creation failed\n"));
         exit(EXIT_FAILURE);
     }
-    
+
     serverAddress.sin_family = AF_INET; // address family is IPv4
     serverAddress.sin_port = htons(SERVERPORT); // set port number
-    
+
     // Convert IPv4 and IPv6 addresses from text to binary form
     if (inet_pton(AF_INET, "127.0.0.1", &serverAddress.sin_addr) <= 0) {
         perror(RED("Invalid address/ Address not supported\n"));
         exit(EXIT_FAILURE);
     }
-    
+
     // Connect to server
     if (connect(clientSocket, (struct sockaddr*)&serverAddress, addrlen) < 0) {
         perror(RED("Connection to server failed\n"));
         //exit(EXIT_FAILURE);
         clientSocket = -1;
     }
-    
+
     return clientSocket;
 }
 
 static int setListeningSocket(int listeningSocket, int listeningPort) {
     struct sockaddr_in address; // IP and port number to bind the socket to
     socklen_t addrlen = sizeof(address); // length of address
-    
+
     // Create socket file descriptor, use IPv4 and TCP
     if ((listeningSocket = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
         perror(RED("Socket creation failed\n"));
@@ -693,14 +730,14 @@ static int setListeningSocket(int listeningSocket, int listeningPort) {
         perror(RED("Binding socket to port failed\n"));
         exit(EXIT_FAILURE);
     }
-    
+
     // Listen for connections
     int maxWaitingToConnect = 0;
     if (listen(listeningSocket, maxWaitingToConnect) < 0) {
         perror(RED("[ERROR]")" Listening for connection failed\n");
         exit(EXIT_FAILURE);
     }
-    
+
     return listeningSocket;
 }
 
@@ -713,11 +750,11 @@ static int sendMessage(int socket, char *buffer) {
     return 0;
 }
 
-static void readMessage(int socket, char *buffer) {
+static int readMessage(int socket, char *buffer) {
     int32_t messageLength;
     read(socket, &messageLength, sizeof(messageLength));
-    read(socket, buffer, ntohl(messageLength));
-    return;
+    int r=read(socket, buffer, ntohl(messageLength));
+    return r;
 }
 
 static int parseInput(char *token, char *buffer, char (*input)[BUFFERSIZE]){
@@ -742,7 +779,7 @@ static int setListeningPort(int argc, const char **argv) {
         printf(RED("Usage: ./client.out <Listening port number>\n"));
         exit(-1);
     }
-    
+
     int listeningPort = atoi(argv[1]); // socket fd
     if (listeningPort < 49152 || listeningPort > 65535) {
         printf(RED("Invalid port number, please choose in the range of [49152, 65535]\n"));
@@ -763,13 +800,13 @@ static void handleWindowResize(int sig) {
 static void resizeWindows(void) {
     int rows, cols;
     getmaxyx(stdscr, rows, cols);
-    
+
     // Delete old windows if they exist
     if (messageWindow) delwin(messageWindow);
     if (statusWindow) delwin(statusWindow);
     if (inputWindow) delwin(inputWindow);
     if (timeWindow) delwin(timeWindow);
-    
+
     // Create windows
     messageWindow = newwin(rows - 2, cols - TIMEWINDOWWIDTH, 0, 0); // Rows 0 ~ (rows - 3), Columns 0 ~ (cols - 21)
     timeWindow = newwin(rows - 2, TIMEWINDOWWIDTH, 0, cols - TIMEWINDOWWIDTH);
@@ -783,7 +820,7 @@ static void resizeWindows(void) {
     idlok(timeWindow, TRUE);
     scrollok(inputWindow, TRUE);
     idlok(inputWindow, TRUE);
-    
+
     // Draw message area
     pthread_mutex_lock(&drawWindow);
     werase(messageWindow);
@@ -809,7 +846,7 @@ static void resizeWindows(void) {
         }
     }
     wrefresh(messageWindow);
-    
+
     // Draw timestamp area
     werase(timeWindow);
     for (int i = startIndex; i < linesToPrint; i++) {
@@ -819,12 +856,12 @@ static void resizeWindows(void) {
         }
     }
     wrefresh(timeWindow);
-    
+
     // Draw status bar
     werase(statusWindow);
     mvwprintw(statusWindow, 0, 0, " Chatting with %s | Press ESC to leave ", currentPeerID);
     wrefresh(statusWindow);
-    
+
     // Prepare input window
     werase(inputWindow);
     wattron(inputWindow, COLOR_PAIR(1));
@@ -834,6 +871,6 @@ static void resizeWindows(void) {
     wmove(inputWindow, 0, pos + 2 + (int)strlen(currentUserID)); // Move cursor to inputWindow
     wrefresh(inputWindow);
     pthread_mutex_unlock(&drawWindow);
-    
     return;
 }
+
