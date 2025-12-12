@@ -10,6 +10,10 @@
 
 #define BUFFERSIZE 1024
 #define JOB_QUEUE_SIZE 16
+#define KEYBYTES 512
+#define KEY_LEN 32        // AES-256 -> 32 bytes
+#define IV_LEN 12         // 96-bit
+#define TAG_LEN 16        // 128-bit tag
 
 // ANSI color codes
 #define RED_TEXT     "\033[31m"
@@ -53,8 +57,8 @@ static void handle_client(int perClientSocket);
 static void *worker_thread(void* arg);
 static int setSocket(int serverSocket);
 static void createThreads(void);
-static void sendMessage(int socket, char *buffer);
-static void readMessage(int socket, char *buffer);
+static int sendMessage(int socket, char *buffer);
+static int readMessage(int socket, char *buffer);
 static void parseMessage(char *token, char (*input)[BUFFERSIZE]);
 static int acceptConnection(int socket, int serverSocket);
 static void removeFromList(bool mode, User **currentUserPtr);

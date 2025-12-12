@@ -28,11 +28,15 @@
 #define BOLD(msg) BOLD_TEXT msg RESET_TEXT
 
 #define BUFFERSIZE 1024
+#define KEYBYTES 512
+#define KEY_LEN 32        // AES-256 -> 32 bytes
+#define IV_LEN 12         // 96-bit
+#define TAG_LEN 16        // 128-bit tag
 
 static int connectToServer(int clientSocket);
 static int setListeningSocket(int listeningSocket, int listeningPort);
 static int sendMessage(int socket, char *buffer);
-static void readMessage(int socket, char *buffer);
+static int readMessage(int socket, char *buffer);
 static int parseInput(char *token, char *buffer, char (*input)[BUFFERSIZE]);
 static int setListeningPort(int argc, const char **argv);
 static void oneToOneChat(void);
