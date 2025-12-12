@@ -323,7 +323,7 @@ int main(int argc, char const* argv[]) {
             printf(YELLOW("%-25s")": %-25s\n", "Logout", "logout");
             printf(YELLOW("%-25s")": %-25s\n", "List Online Users", "list");
             printf(YELLOW("%-25s")": %-25s\n", "Chat with user", "chat <ID>");
-            printf(YELLOW("%-25s")": %-25s\n", "Accept chat request", "chat <ID>");
+            printf(YELLOW("%-25s")": %-25s\n", "Accept chat request", "accept");
             printf(YELLOW("%-25s")": %-25s\n", "Exit Client Program", "exit");
         } else {
             printf("Unknown command, type \"help\" for usage.\n");
