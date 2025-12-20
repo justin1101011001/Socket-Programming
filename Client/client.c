@@ -304,11 +304,11 @@ int main(int argc, char const* argv[]) {
 
                 // Send RSA public key
                 sendMessage(peerSocket, my_asym_public_key);
-                unsigned char encrypt_text[KEYBYTES]={0};
-                int r=read(peerSocket, encrypt_text, KEYBYTES);
-                printf("encrypt_text(%d):\n", r);
-                for (int i = 0; i<r; ++i) printf("%02x", encrypt_text[i]);
-                printf("\n");
+                unsigned char encrypt_text[KEYBYTES] = {0};
+                int r = read(peerSocket, encrypt_text, KEYBYTES);
+//                printf("encrypt_text(%d):\n", r);
+//                for (int i = 0; i<r; ++i) printf("%02x", encrypt_text[i]);
+//                printf("\n");
                 int chat_sym_key_len;
                 rsa_decrypt_key(asym_key, encrypt_text, (size_t)r, chat_sym_key, &chat_sym_key_len);
                 sendencryptMessage(peerSocket,"receive key", sym_key);
@@ -379,7 +379,25 @@ int main(int argc, char const* argv[]) {
                                 fseeko(fp, 0, SEEK_END); off_t fsz = ftello(fp); fseeko(fp, 0, SEEK_SET);
                                 char sizeStr[64]; snprintf(sizeStr, sizeof(sizeStr), "%lld", (long long)fsz);
                                 sendMessage(fsock, sizeStr);
+                                
+                                // Wait for receiver acceptance before proceeding
+                                char fileAcceptResp[16] = {0};
+                                readMessage(fsock, fileAcceptResp);
+                                if (strcmp(fileAcceptResp, "FILE_OK") != 0) {
+                                    printf(YELLOW("Peer did not accept file transfer.\n"));
+                                    fclose(fp);
+                                    shutdown(fsock, SHUT_WR); close(fsock);
+                                    break;
+                                }
+                                
                                 // Perform key exchange: send RSA public key and receive encrypted symmetric key
+                                sendMessage(fsock, (char*)my_asym_public_key);
+                                unsigned char encrypt_text[KEYBYTES] = {0};
+                                int rbytes = (int)read(fsock, encrypt_text, KEYBYTES);
+                                int file_sym_len = 0;
+                                rsa_decrypt_key(asym_key, encrypt_text, (size_t)rbytes, file_sym_key, &file_sym_len);
+                                // Acknowledge (encrypted) to ensure both sides are ready
+                                sendencryptMessage(fsock, "FILE_KEY_OK", file_sym_key);
 
                                 long long sentTotal = 0;
 
@@ -609,7 +627,8 @@ static void *acceptDM(void *arg) { // Thread function to constantly listen for p
             while (!fileAcceptSignal) {
                 int retf = pthread_cond_timedwait(&readyToAcceptFile, &mutex, &tsf);
                 if (retf == ETIMEDOUT) {
-                    // timeout: close and reset
+                    // timeout: notify sender and close
+                    sendMessage(fileSocket, "FILE_NO");
                     close(fileSocket);
                     fileSocket = -1;
                     filePendingRequest = false;
@@ -622,6 +641,9 @@ static void *acceptDM(void *arg) { // Thread function to constantly listen for p
             fileAcceptSignal = false;
             filePendingRequest = false;
             pthread_mutex_unlock(&mutex);
+
+            // Inform sender that we accept and are ready to exchange keys
+            sendMessage(fileSock, "FILE_OK");
 
             // Acknowledge and perform symmetric key exchange
             RAND_bytes(file_sym_key, (int)sizeof(file_sym_key));
