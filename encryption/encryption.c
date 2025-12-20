@@ -110,11 +110,49 @@ int sendencryptMessage(int socket, char *buffer, unsigned char *sym_key){
     return 0;
 }
 
+//int readMessage(int socket, char *buffer) {
+//    int32_t messageLength;
+//    read(socket, &messageLength, sizeof(messageLength));
+//    int r=read(socket, buffer, ntohl(messageLength));
+//    return r;
+//}
+
 int readMessage(int socket, char *buffer) {
-    int32_t messageLength;
-    read(socket, &messageLength, sizeof(messageLength));
-    int r=read(socket, buffer, ntohl(messageLength));
-    return r;
+    int32_t networkLength;
+    int bytesRead = 0;
+    int result;
+
+    // 1. Read the length (Loop to ensure we get all 4 bytes)
+    while (bytesRead < sizeof(networkLength)) {
+        result = read(socket, ((char*)&networkLength) + bytesRead, sizeof(networkLength) - bytesRead);
+        if (result < 0) return -1; // Error
+        if (result == 0) return 0; // Connection closed
+        bytesRead += result;
+    }
+
+    int32_t messageLength = ntohl(networkLength);
+
+    // 2. SAFETY CHECK: Prevent Stack Smashing
+    if (messageLength > BUFFERSIZE || messageLength < 0) {
+        printf("Error: Message too long (%d) for buffer (%d)\n", messageLength, BUFFERSIZE);
+        return -1; // Or handle error appropriately
+    }
+
+    // 3. Read the body (Loop to ensure we get the full message)
+    bytesRead = 0;
+    while (bytesRead < messageLength) {
+        result = read(socket, buffer + bytesRead, messageLength - bytesRead);
+        if (result < 0) return -1;
+        if (result == 0) return 0;
+        bytesRead += result;
+    }
+
+    // Null-terminate explicitly if treating as string, though binary data doesn't care
+    if (bytesRead < BUFFERSIZE) {
+        buffer[bytesRead] = '\0';
+    }
+    
+    return bytesRead;
 }
 
 int readencryptMessage(int socket, unsigned char *buffer, unsigned char *sym_key){
