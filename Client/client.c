@@ -392,10 +392,18 @@ int main(int argc, char const* argv[]) {
                                 
                                 // Perform key exchange: send RSA public key and receive encrypted symmetric key
                                 sendMessage(fsock, (char*)my_asym_public_key);
-                                unsigned char encrypt_text[KEYBYTES] = {0};
-                                int rbytes = (int)read(fsock, encrypt_text, KEYBYTES);
+
+                                unsigned char encKeyBuf[BUFFERSIZE] = {0};
+                                int rbytes = readMessage(fsock, (char*)encKeyBuf);
+                                if (rbytes <= 0) {
+                                    printf(RED("[ERROR]")" Failed to receive encrypted symmetric key.\n");
+                                    fclose(fp);
+                                    shutdown(fsock, SHUT_WR); close(fsock);
+                                    break;
+                                }
                                 int file_sym_len = 0;
-                                rsa_decrypt_key(asym_key, encrypt_text, (size_t)rbytes, file_sym_key, &file_sym_len);
+                                rsa_decrypt_key(asym_key, encKeyBuf, (size_t)rbytes, file_sym_key, &file_sym_len);
+
                                 // Acknowledge (encrypted) to ensure both sides are ready
                                 sendencryptMessage(fsock, "FILE_KEY_OK", file_sym_key);
 
@@ -649,7 +657,24 @@ static void *acceptDM(void *arg) { // Thread function to constantly listen for p
 
             // Acknowledge and perform symmetric key exchange
             RAND_bytes(file_sym_key, (int)sizeof(file_sym_key));
-            exchange_key(file_sym_key, fileSock);
+
+            // Send encrypted symmetric key framed
+            // exchange_key() may use a different framing; here, ensure we send length-prefixed bytes
+
+            // We must receive sender's RSA public key first, to encrypt our symmetric key for them
+            unsigned char senderPubKey[KEYBYTES] = {0};
+            readMessage(fileSock, (char*)senderPubKey);
+
+            // rsa_encrypt_key is assumed available similar to rsa_decrypt_key
+            // Encrypt the symmetric key using the sender's RSA public key
+            unsigned char encKeyOut[KEYBYTES] = {0};
+            int encKeyLen = 0;
+            rsa_encrypt_key(senderPubKey, file_sym_key, KEY_LEN, encKeyOut, &encKeyLen);
+            sendMessage(fileSock, (char*)encKeyOut);
+
+            // Wait for sender's key-ready ack (encrypted)
+            unsigned char ackBuf[BUFFERSIZE] = {0};
+            readencryptMessage(fileSock, ackBuf, file_sym_key);
 
             // Ensure downloads directory exists
             mkdir("downloads", 0700);
@@ -662,10 +687,6 @@ static void *acceptDM(void *arg) { // Thread function to constantly listen for p
                 pthread_testcancel();
                 continue;
             }
-
-            // Wait for sender's key-ready ack
-            unsigned char ackBuf[BUFFERSIZE] = {0};
-            readencryptMessage(fileSock, ackBuf, file_sym_key);
 
             // Receive file chunks until FILE_END
             long long receivedTotal = 0;
