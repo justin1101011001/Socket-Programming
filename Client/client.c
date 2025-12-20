@@ -13,11 +13,10 @@
 #include <errno.h>
 #include <ctype.h>
 #include <time.h>
-#include <openssl/err.h>
-#include <openssl/evp.h>
-#include <openssl/rand.h>
-#include <openssl/pem.h>
-#include <openssl/bio.h>
+#include <sys/stat.h>
+
+typedef struct evp_pkey_st EVP_PKEY; // Forward declaration to avoid including OpenSSL headers here
+int RAND_bytes(unsigned char *buf, int num); // Forward declaration for RAND_bytes
 
 #include "client.h"
 #include "encryption.h"
@@ -32,10 +31,16 @@ static pthread_t DMAcceptor;
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t drawWindow = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t readyToAccept = PTHREAD_COND_INITIALIZER; // Used by acceptDM to indicate readiness to accept the next connection from a peer
-
+pthread_cond_t readyToAcceptFile = PTHREAD_COND_INITIALIZER; // Used to accept incoming file transfers
 bool acceptSignal = false; // DM request accpeted, used by acceptDM to indicate readiness to accept the next connection from a peer
+bool fileAcceptSignal = false; // File transfer accepted signal
 bool DMOngoing = false; // Flag indicating if there's an ongoing DM session
 bool pendingRequest = false; // Flag indicating if there's a pending DM request from a peer
+bool filePendingRequest = false; // Is there a pending file transfer request?
+int fileSocket = -1; // Accepted socket for incoming file transfer
+char incomingFileSender[BUFFERSIZE] = "";
+char incomingFileName[BUFFERSIZE] = "";
+long long incomingFileSize = 0;
 
 char currentUserID[100] = "";
 char currentPeerID[100] = "";
@@ -47,6 +52,7 @@ int peerSocket; // Used for DM with a peer
 unsigned char my_asym_public_key[KEYBYTES]={0};
 EVP_PKEY *asym_key;
 unsigned char chat_sym_key[KEY_LEN]={0};
+static unsigned char file_sym_key[KEY_LEN] = {0};
 
 int main(int argc, char const* argv[]) {
 //MARK: - Socket Setup
@@ -276,8 +282,9 @@ int main(int argc, char const* argv[]) {
                 pthread_mutex_unlock(&mutex);
 
                 // Wait for peer response
-                char response[3];
+                sendMessage(peerSocket, "CHAT");
                 sendMessage(peerSocket, currentUserID); // Send messaging request
+                char response[3];
                 printf(YELLOW("Waiting for peer to repond, please wait(10s)...")"\n");
                 readMessage(peerSocket, response);
 
@@ -323,6 +330,113 @@ int main(int argc, char const* argv[]) {
                 printf("Invalid parameters.\nUsage: chat <ID>\n");
             }
 
+//MARK: - Sendfile
+        } else if (strcmp(token, "sendfile") == 0) {
+            char sendBuffer[BUFFERSIZE] = "";
+            char inputTokens[3][BUFFERSIZE] = {0}; // 1 peerID, 2 filepath
+            int parameterIndex = parseInput(token, sendBuffer, inputTokens);
+            if (parameterIndex == 3) {
+                if (!loggedIn) {
+                    printf("You are currently not logged in, plaese login to use this feature.\n");
+                } else if (strcmp(inputTokens[1], currentUserID) == 0) {
+                    printf("Cannot send a file to yourself.\n");
+                } else {
+                    // Ask server for peer address (reuse chat <ID> flow)
+                    char addrReq[BUFFERSIZE] = "";
+                    snprintf(addrReq, sizeof(addrReq), "chat %s", inputTokens[1]);
+                    sendencryptMessage(clientSocket, addrReq, sym_key);
+                    readencryptMessage(clientSocket, recvBuffer, sym_key);
+                    if (strncmp((char*)recvBuffer, "Peer", 4) == 0) {
+                        printf("%s", recvBuffer);
+                    } else {
+                        struct sockaddr_in peerAddress; socklen_t addrlen = sizeof(peerAddress);
+                        peerAddress.sin_family = AF_INET;
+                        unsigned char str_addr[5] = {}, str_port[3] = {};
+                        readencryptMessage(clientSocket, str_addr, sym_key);
+                        readencryptMessage(clientSocket, str_port, sym_key);
+                        memcpy(&(peerAddress.sin_addr.s_addr), str_addr, sizeof(in_addr_t));
+                        memcpy(&(peerAddress.sin_port), str_port, sizeof(in_port_t));
+                        int fsock = socket(AF_INET, SOCK_STREAM, 0);
+                        if (fsock < 0) { perror(RED("[ERROR]")" Socket creation failed\n"); }
+                        else if (connect(fsock, (struct sockaddr*)&peerAddress, addrlen) < 0) {
+                            printf(RED("Peer offline :(\n"));
+                            close(fsock);
+                        } else {
+                            // Identify this connection as a file transfer and send metadata
+                            sendMessage(fsock, "FILE");
+                            sendMessage(fsock, currentUserID);
+                            // Extract basename of file path
+                            const char *fullpath = inputTokens[2];
+                            const char *slash = strrchr(fullpath, '/');
+                            const char *basename = slash ? (slash + 1) : fullpath;
+                            sendMessage(fsock, (char*)basename);
+                            // Get file size
+                            FILE *fp = fopen(fullpath, "rb");
+                            if (!fp) {
+                                perror(RED("[ERROR]")" Cannot open file\n");
+                                shutdown(fsock, SHUT_WR); close(fsock);
+                            } else {
+                                fseeko(fp, 0, SEEK_END); off_t fsz = ftello(fp); fseeko(fp, 0, SEEK_SET);
+                                char sizeStr[64]; snprintf(sizeStr, sizeof(sizeStr), "%lld", (long long)fsz);
+                                sendMessage(fsock, sizeStr);
+                                // Perform key exchange: send RSA public key and receive encrypted symmetric key
+
+                                long long sentTotal = 0;
+
+                                // Simple base64 encode inline
+                                static const char b64chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+                                const size_t CHUNK = 512; // keep small so encoded+overhead fits BUFFERSIZE
+                                unsigned char raw[CHUNK];
+                                char b64buf[BUFFERSIZE];
+                                size_t nread;
+                                while ((nread = fread(raw, 1, CHUNK, fp)) > 0) {
+                                    size_t outlen = 0; size_t inlen = nread;
+                                    size_t i = 0, j = 0; unsigned char a3[3]; unsigned char a4[4];
+                                    memset(b64buf, 0, sizeof(b64buf));
+                                    size_t inpos = 0;
+                                    while (inpos < inlen) {
+                                        a3[i++] = raw[inpos++];
+                                        if (i == 3) {
+                                            a4[0] = (a3[0] & 0xfc) >> 2;
+                                            a4[1] = ((a3[0] & 0x03) << 4) + ((a3[1] & 0xf0) >> 4);
+                                            a4[2] = ((a3[1] & 0x0f) << 2) + ((a3[2] & 0xc0) >> 6);
+                                            a4[3] = a3[2] & 0x3f;
+                                            for (i = 0; i < 4; i++) b64buf[j++] = b64chars[a4[i]];
+                                            i = 0;
+                                        }
+                                    }
+                                    if (i) {
+                                        for (size_t k = i; k < 3; k++) a3[k] = '\0';
+                                        a4[0] = (a3[0] & 0xfc) >> 2;
+                                        a4[1] = ((a3[0] & 0x03) << 4) + ((a3[1] & 0xf0) >> 4);
+                                        a4[2] = ((a3[1] & 0x0f) << 2) + ((a3[2] & 0xc0) >> 6);
+                                        a4[3] = a3[2] & 0x3f;
+                                        for (size_t k = 0; k < i + 1; k++) b64buf[j++] = b64chars[a4[k]];
+                                        while (i++ < 3) b64buf[j++] = '=';
+                                    }
+                                    b64buf[j] = '\0';
+
+                                    sendencryptMessage(fsock, b64buf, file_sym_key);
+
+                                    sentTotal += (long long)nread;
+                                    double spct = (fsz > 0) ? (100.0 * (double)sentTotal / (double)fsz) : 0.0;
+                                    printf("\rSending %s: %lld/%lld bytes (%.0f%%)", basename, sentTotal, (long long)fsz, spct);
+                                    fflush(stdout);
+                                }
+                                fclose(fp);
+                                printf("\n");
+                                // Signal end of file
+                                sendencryptMessage(fsock, "FILE_END", file_sym_key);
+                                shutdown(fsock, SHUT_WR); close(fsock);
+                                printf(GREEN("File sent successfully.\n"));
+                            }
+                        }
+                    }
+                }
+            } else {
+                printf("Invalid parameters.\nUsage: sendfile <ID> <filepath>\n");
+            }
+
 //MARK: - Accept DM
         } else if (strcmp(token, "accept") == 0){
             if (!loggedIn) {
@@ -364,6 +478,22 @@ int main(int argc, char const* argv[]) {
             DMOngoing = false;
             pthread_mutex_unlock(&mutex);
 
+//MARK: - Accept File
+        } else if (strcmp(token, "acceptfile") == 0) {
+            if (!loggedIn) {
+                printf("You are currently not logged in, plaese login to use this feature.\n");
+                continue;
+            }
+            pthread_mutex_lock(&mutex);
+            if (!filePendingRequest || fileSocket < 0) {
+                pthread_mutex_unlock(&mutex);
+                printf(YELLOW("No incoming file requests now.\n"));
+                continue;
+            }
+            fileAcceptSignal = true;
+            pthread_cond_signal(&readyToAcceptFile);
+            pthread_mutex_unlock(&mutex);
+
 //MARK: - Help
         } else if (strcmp(token, "help") == 0) {
             printf(YELLOW("%-25s")": %-25s\n", "Registration", "register <ID> <password>");
@@ -373,6 +503,8 @@ int main(int argc, char const* argv[]) {
             printf(YELLOW("%-25s")": %-25s\n", "List Online Users", "list");
             printf(YELLOW("%-25s")": %-25s\n", "Chat with user", "chat <ID>");
             printf(YELLOW("%-25s")": %-25s\n", "Accept chat request", "accept");
+            printf(YELLOW("%-25s")": %-25s\n", "Send file to user", "sendfile <ID> <filepath>");
+            printf(YELLOW("%-25s")": %-25s\n", "Accept file request", "acceptfile");
             printf(YELLOW("%-25s")": %-25s\n", "Exit Client Program", "exit");
         } else {
             printf("Unknown command, type \"help\" for usage.\n");
@@ -385,6 +517,7 @@ int main(int argc, char const* argv[]) {
     pthread_mutex_destroy(&mutex);
     pthread_mutex_destroy(&drawWindow);
     pthread_cond_destroy(&readyToAccept);
+    pthread_cond_destroy(&readyToAcceptFile);
 
     return 0;
 }
@@ -402,50 +535,159 @@ static void *acceptDM(void *arg) { // Thread function to constantly listen for p
             continue;
         }
 
-        // Reject request if a chat session is already in progress
-        pthread_mutex_lock(&mutex);
-        if (DMOngoing) {
-            readMessage(tmp, NULL);
-            sendMessage(tmp, "nob");
-            shutdown(tmp, SHUT_WR);  // Finish sending, tell peer “no more data”
-            close(tmp);
+// Removed: peerSocket = tmp;
+        char typeTag[16] = {0};
+        readMessage(tmp, typeTag);
+        if (strcmp(typeTag, "CHAT") == 0) {
+            pthread_mutex_lock(&mutex);
+            if (DMOngoing) {
+                // consume the sender's next message (their ID)
+                readMessage(tmp, currentPeerID);
+                sendMessage(tmp, "nob");
+                shutdown(tmp, SHUT_WR);
+                close(tmp);
+                currentPeerID[0] = '\0';
+                pthread_mutex_unlock(&mutex);
+                continue;
+            }
             pthread_mutex_unlock(&mutex);
+            peerSocket = tmp; // assign the accepted socket to the global for chat
+
+            // Read peer ID and prompt user to accept via "accept" command
+            readMessage(peerSocket, currentPeerID);
+            printf("\n"YELLOW("[INCOMING]")BLUE(" %s")" wants to chat, accept? [accept](10s)\n", currentPeerID);
+            printf(BOLD("%s> "), currentUserID);
+            fflush(stdout);
+
+            pthread_mutex_lock(&mutex);
+            pendingRequest = true;
+
+            // Compute wake-up time (10 seconds from now)
+            struct timespec ts;
+            clock_gettime(CLOCK_REALTIME, &ts);
+            ts.tv_sec += 10;
+
+            // Wait for accept or timeout
+            while (!acceptSignal) {
+                int ret = pthread_cond_timedwait(&readyToAccept, &mutex, &ts);
+                if (ret == ETIMEDOUT) {
+                    sendMessage(peerSocket, "no");
+                    shutdown(peerSocket, SHUT_WR);
+                    close(peerSocket);
+                    currentPeerID[0] = '\0';
+                    peerSocket = -1;
+                    break;
+                }
+            }
+
+            acceptSignal = false;
+            pendingRequest = false;
+            pthread_mutex_unlock(&mutex);
+
+        } else if (strcmp(typeTag, "FILE") == 0) {
+            int fileSock = tmp;
+            char senderID[BUFFERSIZE] = {0};
+            char filename[BUFFERSIZE] = {0};
+            char sizeStr[64] = {0};
+            readMessage(fileSock, senderID);
+            readMessage(fileSock, filename);
+            readMessage(fileSock, sizeStr);
+            long long expectedSize = atoll(sizeStr);
+
+            // Prompt for file acceptance
+            printf("\n"YELLOW("[INCOMING FILE]")BLUE(" %s")" -> %s (%s bytes). Accept? [acceptfile](10s)\n", senderID, filename, sizeStr);
+            printf(BOLD("%s> "), currentUserID);
+            fflush(stdout);
+
+            pthread_mutex_lock(&mutex);
+            filePendingRequest = true;
+            fileSocket = fileSock;
+            strncpy(incomingFileSender, senderID, sizeof(incomingFileSender) - 1);
+            strncpy(incomingFileName, filename, sizeof(incomingFileName) - 1);
+            incomingFileSize = expectedSize;
+            struct timespec tsf; clock_gettime(CLOCK_REALTIME, &tsf); tsf.tv_sec += 10;
+            while (!fileAcceptSignal) {
+                int retf = pthread_cond_timedwait(&readyToAcceptFile, &mutex, &tsf);
+                if (retf == ETIMEDOUT) {
+                    // timeout: close and reset
+                    close(fileSocket);
+                    fileSocket = -1;
+                    filePendingRequest = false;
+                    fileAcceptSignal = false;
+                    pthread_mutex_unlock(&mutex);
+                    // continue outer accept loop
+                    continue;
+                }
+            }
+            fileAcceptSignal = false;
+            filePendingRequest = false;
+            pthread_mutex_unlock(&mutex);
+
+            // Acknowledge and perform symmetric key exchange
+            RAND_bytes(file_sym_key, (int)sizeof(file_sym_key));
+            exchange_key(file_sym_key, fileSock);
+
+            // Ensure downloads directory exists
+            mkdir("downloads", 0700);
+            char outPath[BUFFERSIZE * 2];
+            snprintf(outPath, sizeof(outPath), "downloads/%s", filename);
+            FILE *out = fopen(outPath, "wb");
+            if (!out) {
+                perror(RED("[ERROR]")" Cannot open output file\n");
+                shutdown(fileSock, SHUT_WR); close(fileSock);
+                pthread_testcancel();
+                continue;
+            }
+
+            // Wait for sender's key-ready ack
+            unsigned char ackBuf[BUFFERSIZE] = {0};
+            readencryptMessage(fileSock, ackBuf, file_sym_key);
+
+            // Receive file chunks until FILE_END
+            long long receivedTotal = 0;
+            while (1) {
+                unsigned char encBuf[BUFFERSIZE] = {0};
+                readencryptMessage(fileSock, encBuf, file_sym_key);
+                if (strcmp((char*)encBuf, "FILE_END") == 0) break;
+                // base64 decode
+                char *p = (char*)encBuf; size_t len = strlen(p);
+                // decode base64 inline
+                int val = 0, valb = -8; unsigned char outByte;
+                for (size_t i = 0; i < len; i++) {
+                    unsigned char c = p[i];
+                    int d;
+                    if (c >= 'A' && c <= 'Z') d = c - 'A';
+                    else if (c >= 'a' && c <= 'z') d = c - 'a' + 26;
+                    else if (c >= '0' && c <= '9') d = c - '0' + 52;
+                    else if (c == '+') d = 62;
+                    else if (c == '/') d = 63;
+                    else if (c == '=') break; else continue;
+                    val = (val << 6) + d; valb += 6;
+                    if (valb >= 0) {
+                        outByte = (unsigned char)((val >> valb) & 0xFF);
+                        fwrite(&outByte, 1, 1, out);
+                        receivedTotal++;
+                        valb -= 8;
+                    }
+                }
+                if (incomingFileSize > 0) {
+                    double rpct = (100.0 * (double)receivedTotal / (double)incomingFileSize);
+                    printf("\rReceiving %s: %lld/%lld bytes (%.0f%%)", incomingFileName, receivedTotal, incomingFileSize, rpct);
+                    fflush(stdout);
+                }
+            }
+            printf("\n");
+            fclose(out);
+            shutdown(fileSock, SHUT_WR); close(fileSock);
+            printf(GREEN("Received file saved to %s (%lld bytes).\n"), outPath, receivedTotal);
+
+            // Continue loop to accept more connections
+            continue;
+        } else {
+            // Unknown type, close
+            shutdown(tmp, SHUT_WR); close(tmp);
             continue;
         }
-        pthread_mutex_unlock(&mutex);
-
-        // Read peer ID, ask user to accept request. Request times out after 30 seconds if user doesn't accept
-        peerSocket = tmp;
-        readMessage(peerSocket, currentPeerID);
-        printf("\n"YELLOW("[INCOMING]")BLUE(" %s")" wants to chat, accept? [accept](10s)\n", currentPeerID);
-        printf(BOLD("%s> "), currentUserID);
-        fflush(stdout);
-
-        // Wait 10 seconds or request accepted
-        pthread_mutex_lock(&mutex);
-        pendingRequest = true;
-
-        // Compute wake-up time (30 seconds from now)
-        struct timespec ts;
-        clock_gettime(CLOCK_REALTIME, &ts);
-        ts.tv_sec += 10;
-
-        // Wait for accept or timeout
-        while (!acceptSignal) {
-            int ret = pthread_cond_timedwait(&readyToAccept, &mutex, &ts);
-            if (ret == ETIMEDOUT) {
-                sendMessage(peerSocket, "no");
-                shutdown(peerSocket, SHUT_WR);
-                close(peerSocket);
-                currentPeerID[0] = '\0';
-                peerSocket = -1;
-                break;
-            }
-        }
-
-        acceptSignal = false;
-        pendingRequest = false;
-        pthread_mutex_unlock(&mutex);
 
         pthread_testcancel();
     }
