@@ -382,6 +382,7 @@ int main(int argc, char const* argv[]) {
                                 sendMessage(fsock, sizeStr);
                                 
                                 // Wait for receiver acceptance before proceeding
+                                printf(YELLOW("Waiting for peer to accept file transfer...(10s)\n"));
                                 char fileAcceptResp[16] = {0};
                                 readMessage(fsock, fileAcceptResp);
                                 if (strcmp(fileAcceptResp, "FILE_OK") != 0) {
