@@ -555,7 +555,6 @@ static void *acceptDM(void *arg) { // Thread function to constantly listen for p
             continue;
         }
 
-// Removed: peerSocket = tmp;
         char typeTag[16] = {0};
         readMessage(tmp, typeTag);
         if (strcmp(typeTag, "CHAT") == 0) {
@@ -663,9 +662,9 @@ static void *acceptDM(void *arg) { // Thread function to constantly listen for p
                 continue;
             }
 
-            // Wait for sender's key-ready ack
-            unsigned char ackBuf[BUFFERSIZE] = {0};
-            readencryptMessage(fileSock, ackBuf, file_sym_key);
+//            // Wait for sender's key-ready ack
+//            unsigned char ackBuf[BUFFERSIZE] = {0};
+//            readencryptMessage(fileSock, ackBuf, file_sym_key);
 
             // Receive file chunks until FILE_END
             long long receivedTotal = 0;
