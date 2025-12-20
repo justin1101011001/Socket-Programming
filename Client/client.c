@@ -408,29 +408,31 @@ int main(int argc, char const* argv[]) {
                                 char b64buf[BUFFERSIZE];
                                 size_t nread;
                                 while ((nread = fread(raw, 1, CHUNK, fp)) > 0) {
-                                    size_t outlen = 0; size_t inlen = nread;
-                                    size_t i = 0, j = 0; unsigned char a3[3]; unsigned char a4[4];
-                                    memset(b64buf, 0, sizeof(b64buf));
-                                    size_t inpos = 0;
-                                    while (inpos < inlen) {
-                                        a3[i++] = raw[inpos++];
-                                        if (i == 3) {
-                                            a4[0] = (a3[0] & 0xfc) >> 2;
-                                            a4[1] = ((a3[0] & 0x03) << 4) + ((a3[1] & 0xf0) >> 4);
-                                            a4[2] = ((a3[1] & 0x0f) << 2) + ((a3[2] & 0xc0) >> 6);
-                                            a4[3] = a3[2] & 0x3f;
-                                            for (i = 0; i < 4; i++) b64buf[j++] = b64chars[a4[i]];
-                                            i = 0;
+                                    // Base64 encode raw -> b64buf
+                                    static const char b64chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+                                    size_t j = 0; size_t i = 0;
+                                    unsigned char a3[3];
+                                    for (size_t inpos = 0; inpos < nread; ) {
+                                        i = 0;
+                                        while (i < 3 && inpos < nread) {
+                                            a3[i++] = raw[inpos++];
                                         }
-                                    }
-                                    if (i) {
-                                        for (size_t k = i; k < 3; k++) a3[k] = '\0';
-                                        a4[0] = (a3[0] & 0xfc) >> 2;
-                                        a4[1] = ((a3[0] & 0x03) << 4) + ((a3[1] & 0xf0) >> 4);
-                                        a4[2] = ((a3[1] & 0x0f) << 2) + ((a3[2] & 0xc0) >> 6);
-                                        a4[3] = a3[2] & 0x3f;
-                                        for (size_t k = 0; k < i + 1; k++) b64buf[j++] = b64chars[a4[k]];
-                                        while (i++ < 3) b64buf[j++] = '=';
+                                        if (i == 3) {
+                                            b64buf[j++] = b64chars[(a3[0] & 0xfc) >> 2];
+                                            b64buf[j++] = b64chars[((a3[0] & 0x03) << 4) | ((a3[1] & 0xf0) >> 4)];
+                                            b64buf[j++] = b64chars[((a3[1] & 0x0f) << 2) | ((a3[2] & 0xc0) >> 6)];
+                                            b64buf[j++] = b64chars[a3[2] & 0x3f];
+                                        } else if (i == 2) {
+                                            b64buf[j++] = b64chars[(a3[0] & 0xfc) >> 2];
+                                            b64buf[j++] = b64chars[((a3[0] & 0x03) << 4) | ((a3[1] & 0xf0) >> 4)];
+                                            b64buf[j++] = b64chars[(a3[1] & 0x0f) << 2];
+                                            b64buf[j++] = '=';
+                                        } else if (i == 1) {
+                                            b64buf[j++] = b64chars[(a3[0] & 0xfc) >> 2];
+                                            b64buf[j++] = b64chars[(a3[0] & 0x03) << 4];
+                                            b64buf[j++] = '=';
+                                            b64buf[j++] = '=';
+                                        }
                                     }
                                     b64buf[j] = '\0';
 
@@ -671,26 +673,37 @@ static void *acceptDM(void *arg) { // Thread function to constantly listen for p
                 unsigned char encBuf[BUFFERSIZE] = {0};
                 readencryptMessage(fileSock, encBuf, file_sym_key);
                 if (strcmp((char*)encBuf, "FILE_END") == 0) break;
-                // base64 decode
-                char *p = (char*)encBuf; size_t len = strlen(p);
-                // decode base64 inline
-                int val = 0, valb = -8; unsigned char outByte;
+                // Base64 decode encBuf -> decoded[] and write
+                const char *p = (const char*)encBuf;
+                size_t len = strlen(p);
+                unsigned char decoded[BUFFERSIZE];
+                size_t decLen = 0;
+                int val = 0, valb = -8;
                 for (size_t i = 0; i < len; i++) {
-                    unsigned char c = p[i];
-                    int d;
+                    unsigned char c = (unsigned char)p[i];
+                    int d = -1;
                     if (c >= 'A' && c <= 'Z') d = c - 'A';
                     else if (c >= 'a' && c <= 'z') d = c - 'a' + 26;
                     else if (c >= '0' && c <= '9') d = c - '0' + 52;
                     else if (c == '+') d = 62;
                     else if (c == '/') d = 63;
-                    else if (c == '=') break; else continue;
-                    val = (val << 6) + d; valb += 6;
+                    else if (c == '=') { break; }
+                    else { continue; }
+                    val = (val << 6) | d;
+                    valb += 6;
                     if (valb >= 0) {
-                        outByte = (unsigned char)((val >> valb) & 0xFF);
-                        fwrite(&outByte, 1, 1, out);
-                        receivedTotal++;
+                        decoded[decLen++] = (unsigned char)((val >> valb) & 0xFF);
                         valb -= 8;
+                        if (decLen == sizeof(decoded)) {
+                            fwrite(decoded, 1, decLen, out);
+                            receivedTotal += decLen;
+                            decLen = 0;
+                        }
                     }
+                }
+                if (decLen > 0) {
+                    fwrite(decoded, 1, decLen, out);
+                    receivedTotal += decLen;
                 }
                 if (incomingFileSize > 0) {
                     double rpct = (100.0 * (double)receivedTotal / (double)incomingFileSize);
@@ -702,6 +715,8 @@ static void *acceptDM(void *arg) { // Thread function to constantly listen for p
             fclose(out);
             shutdown(fileSock, SHUT_WR); close(fileSock);
             printf(GREEN("Received file saved to %s (%lld bytes).\n"), outPath, receivedTotal);
+            printf(BOLD("%s> "), currentUserID);
+            fflush(stdout);
 
             // Continue loop to accept more connections
             continue;
@@ -1017,7 +1032,7 @@ static int sendMessage(int socket, char *buffer) {
 static int readMessage(int socket, char *buffer) {
     int32_t messageLength;
     read(socket, &messageLength, sizeof(messageLength));
-    int r=read(socket, buffer, ntohl(messageLength));
+    int r = read(socket, buffer, ntohl(messageLength));
     return r;
 }
 
