@@ -362,20 +362,21 @@ int main(int argc, char const* argv[]) {
                             printf(RED("Peer offline :(\n"));
                             close(fsock);
                         } else {
-                            // Identify this connection as a file transfer and send metadata
-                            sendMessage(fsock, "FILE");
-                            sendMessage(fsock, currentUserID);
                             // Extract basename of file path
                             const char *fullpath = inputTokens[2];
                             const char *slash = strrchr(fullpath, '/');
                             const char *basename = slash ? (slash + 1) : fullpath;
-                            sendMessage(fsock, (char*)basename);
                             // Get file size
                             FILE *fp = fopen(fullpath, "rb");
                             if (!fp) {
                                 perror(RED("[ERROR]")" Cannot open file\n");
                                 shutdown(fsock, SHUT_WR); close(fsock);
                             } else {
+                                // Identify this connection as a file transfer and send metadata
+                                sendMessage(fsock, "FILE");
+                                sendMessage(fsock, currentUserID);
+                                sendMessage(fsock, (char*)basename);
+                                
                                 fseeko(fp, 0, SEEK_END); off_t fsz = ftello(fp); fseeko(fp, 0, SEEK_SET);
                                 char sizeStr[64]; snprintf(sizeStr, sizeof(sizeStr), "%lld", (long long)fsz);
                                 sendMessage(fsock, sizeStr);
@@ -387,7 +388,7 @@ int main(int argc, char const* argv[]) {
                                     printf(YELLOW("Peer did not accept file transfer.\n"));
                                     fclose(fp);
                                     shutdown(fsock, SHUT_WR); close(fsock);
-                                    break;
+                                    continue;
                                 }
                                 
                                 // Perform key exchange: send RSA public key and receive encrypted symmetric key
@@ -632,11 +633,11 @@ static void *acceptDM(void *arg) { // Thread function to constantly listen for p
                     sendMessage(fileSocket, "FILE_NO");
                     close(fileSocket);
                     fileSocket = -1;
-                    filePendingRequest = false;
-                    fileAcceptSignal = false;
-                    pthread_mutex_unlock(&mutex);
+//                    filePendingRequest = false;
+//                    fileAcceptSignal = false;
+//                    pthread_mutex_unlock(&mutex);
                     // continue outer accept loop
-                    continue;
+                    break;
                 }
             }
             fileAcceptSignal = false;
