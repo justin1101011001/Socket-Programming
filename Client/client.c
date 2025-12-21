@@ -672,7 +672,7 @@ static void *acceptDM(void *arg) { // Thread function to constantly listen for p
             long long receivedTotal = 0;
             unsigned char encBuf[BUFFERSIZE] = {0};
             while (1) {
-                memcpy(encBuf, "\0", sizeof("\0"));
+                memcpy(encBuf, 0, BUFFERSIZE);
                 readencryptMessage(fileSock, encBuf, file_sym_key);
                 if (strcmp((char*)encBuf, "FILE_END") == 0) break;
                 // Base64 decode encBuf -> decoded[] and write

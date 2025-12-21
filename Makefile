@@ -17,4 +17,4 @@ bin_server: $(SERVER_SRC) $(SERVER_HDR)
 	$(CC) $(CFLAGS) $(SERVER_SRC) -o server.out
 
 clean:
-	rm -f client.out server.out
+	rm -rf client.out server.out downloads/
