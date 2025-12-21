@@ -101,7 +101,7 @@ int sendMessage(int socket, char *buffer) {
 
 int sendencryptMessage(int socket, char *buffer, unsigned char *sym_key){
     unsigned char encrypt[BUFFERSIZE]={0};
-    int encrypt_len=encryptMessage(buffer, encrypt, sym_key);
+    int encrypt_len = encryptMessage(buffer, encrypt, sym_key);
     int32_t messageLength = htonl(encrypt_len+1);
     if (send(socket, &messageLength, sizeof(messageLength), 0) < 0) {
         return -1;
@@ -113,14 +113,14 @@ int sendencryptMessage(int socket, char *buffer, unsigned char *sym_key){
 int readMessage(int socket, char *buffer) {
     int32_t messageLength;
     read(socket, &messageLength, sizeof(messageLength));
-    int r=read(socket, buffer, ntohl(messageLength));
+    int r = read(socket, buffer, ntohl(messageLength));
     return r;
 }
 
 int readencryptMessage(int socket, unsigned char *buffer, unsigned char *sym_key){
     unsigned char encrypt[BUFFERSIZE]={0};
-    int r=readMessage(socket, (char *)encrypt);
-    if(r==0) return 0;
+    int r = readMessage(socket, (char *)encrypt);
+    if(r == 0) return 0;
     decryptMessage(encrypt, buffer, sym_key, r-1);
     return (int)strlen((char *)buffer);
 }
