@@ -43,6 +43,10 @@ User *loggedInUsers = NULL;
 // Global job queue
 JobQueue job_queue;
 
+// Global group lists
+Group *grouplist = NULL;
+pthread_mutex_t grouplist_lock=PTHREAD_MUTEX_INITIALIZER;
+
 // For server shutdown
 static volatile sig_atomic_t shuttingDown = 0;
 static int serverSocketGlobal = -1; // Store listening socket globally
@@ -311,8 +315,17 @@ static void handle_client(int perClientSocket) {
             }
             pthread_mutex_unlock(&userList_mutex);
 
+            pthread_mutex_lock(&grouplist_lock);
             sendencryptMessage(perClientSocket, "END OF USER LIST", sym_key);
             fprintf(stderr, MAGENTA("[LOG]")"  | Sent user list to client\n");
+            Group *g = grouplist;
+            while (g != NULL) {
+                sendencryptMessage(perClientSocket, g ->name, sym_key);
+                g = g -> next;
+            }
+            sendencryptMessage(perClientSocket, "END OF CHATROOM LIST", sym_key);
+            pthread_mutex_unlock(&grouplist_lock);
+            fprintf(stderr, MAGENTA("[LOG]")"  | Sent chatroom list to client\n");
             fprintf(stderr, MAGENTA("[LOG]")"  +-List process complete\n");
 
 //MARK: - DM
@@ -343,6 +356,75 @@ static void handle_client(int perClientSocket) {
 
             fprintf(stderr, MAGENTA("[LOG]")"  +-Sent, keeping connection to client for next command\n");
             // close connection???
+        } else if(strcmp(token, "create")==0){
+            fprintf(stderr, MAGENTA("[LOG]")" Start group chatroom process\n");
+            char inputTokens[2][BUFFERSIZE] = {0}; // 1 = peer ID
+            parseMessage(token, inputTokens);
+            fprintf(stderr, MAGENTA("[LOG]")"  | Checking if group exists\n");
+            Group *cur=grouplist;
+            bool exist=false;
+            while(cur!=NULL){
+                if( strcmp(cur->name, inputTokens[1])==0 ){
+                    sendencryptMessage(perClientSocket, "Created", sym_key);
+                    fprintf(stderr, MAGENTA("[LOG]")"  | The group %s has been created\n", inputTokens[1]);
+                    fprintf(stderr, MAGENTA("[LOG]")"  +-Create group failed\n");
+                    exist=true; break;
+                }
+                cur=cur->next;
+            }
+            if(exist==true) continue;
+            Group *newgroup=(Group*)malloc(sizeof(Group));
+            strcpy(newgroup->name, inputTokens[1]);
+            newgroup->num_member=1;
+            pthread_mutexattr_t attr;
+            pthread_mutexattr_init(&attr);
+            pthread_mutex_init(&newgroup->group_lock, &attr);
+            newgroup->message_list_head=NULL; newgroup->message_list_tail=NULL;
+            sendencryptMessage(perClientSocket, "Creation OK", sym_key);
+            readencryptMessage(perClientSocket, newgroup->sym_key, sym_key);
+            Member *newmem=(Member*)malloc(sizeof(Member));
+            strcpy(newmem->ID, currentUser->ID);
+            newmem->next=NULL;
+            newgroup->member_list=newmem;
+            pthread_mutex_lock(&grouplist_lock);
+            newgroup->next=grouplist;
+            grouplist=newgroup;
+            pthread_mutex_unlock(&grouplist_lock);
+            fprintf(stderr, MAGENTA("[LOG]")"  | %s has been created successfully\n", inputTokens[1]);
+            sendgroupmessage(currentUser->ID, perClientSocket, newgroup); //the thread is now responsible for sending message from user to group
+            fprintf(stderr, MAGENTA("[LOG]")" %s has leaved group %s\n", currentUser->ID, inputTokens[1]);
+        } else if(strcmp(token, "join")==0){
+            char inputTokens[2][BUFFERSIZE] = {0}; // 1 = peer ID
+            parseMessage(token, inputTokens);
+            fprintf(stderr, MAGENTA("[LOG]")" %s want to join group %s\n", currentUser->ID, inputTokens[1]);
+            fprintf(stderr, MAGENTA("[LOG]")"  | Checking if group exists\n");
+            Group *cur=grouplist;
+            bool exist=false;
+            while(cur!=NULL){
+                if( strcmp(cur->name, inputTokens[1])==0 ){
+                    exist=true; break;
+                }
+                cur=cur->next;
+            }
+            if(exist==false){
+                sendencryptMessage(perClientSocket, "Not exist", sym_key);
+                fprintf(stderr, MAGENTA("[LOG]")"  | The group %s doesn't exist\n", inputTokens[1]);
+                fprintf(stderr, MAGENTA("[LOG]")"  +-Join group failed\n");
+                continue;
+            }
+            sendencryptMessage(perClientSocket, "Exist", sym_key);
+            readencryptMessage(perClientSocket, recvBuffer, sym_key);
+            sendencryptMessage(perClientSocket, (char *)cur->sym_key, sym_key);
+            Member *newmem=(Member*)malloc(sizeof(Member));
+            strcpy(newmem->ID, currentUser->ID);
+            pthread_mutex_lock(&cur->group_lock);
+            newmem->next=cur->member_list;
+            cur->member_list=newmem;
+            cur->num_member+=1;
+            pthread_mutex_unlock(&cur->group_lock);
+            fprintf(stderr, MAGENTA("[LOG]")"  | %s has joined group %s\n", currentUser->ID, cur->name);
+            sendgroupmessage(currentUser->ID, perClientSocket, cur); //the thread is now responsible for sending message from user to group
+            fprintf(stderr, MAGENTA("[LOG]")"  | %s has leaved group %s\n", currentUser->ID, cur->name);
         } else { // Unknown command
             sendencryptMessage(perClientSocket, "Unknown command.\n", sym_key);
         }
@@ -757,4 +839,149 @@ static int directoryExists(const char *path) {
         return S_ISDIR(st.st_mode);  // true if it's a directory
     }
     return 0;  // stat() failed → doesn't exist (or can't be accessed)
+}
+
+static void sendgroupmessage(char *ID, int perClientSocket, Group *curgroup){
+    pthread_t receiver;
+
+    MessageBlock *joinMessage=(MessageBlock *)malloc(sizeof(MessageBlock));
+    strcpy(joinMessage->message, "JOIN");
+    strcpy(joinMessage->ID, ID);
+    joinMessage->next=NULL;
+    pthread_mutex_lock(&curgroup->group_lock);
+    joinMessage->remaining=curgroup->num_member;
+    if(curgroup->message_list_head==NULL){ // This is the first message in group
+        curgroup->message_list_head=joinMessage;
+        curgroup->message_list_tail=joinMessage;
+    }
+    else{
+        curgroup->message_list_tail->next=joinMessage;
+        curgroup->message_list_tail=joinMessage;
+    }
+    pthread_mutex_unlock(&curgroup->group_lock);
+
+    void *argument=(void *)malloc(sizeof(char *)+sizeof(int)+sizeof(Group *)+sizeof(MessageBlock *));
+    memcpy(argument, &ID, sizeof(char *));
+    memcpy(argument+sizeof(char *), &perClientSocket, sizeof(int));
+    memcpy(argument+sizeof(char *)+sizeof(int), &curgroup, sizeof(Group *));
+    memcpy(argument+sizeof(char *)+sizeof(int)+sizeof(Group *), &joinMessage, sizeof(MessageBlock *));
+    pthread_create(&receiver, NULL, readgroupmessage, argument);
+
+    while(true){
+        char recvBuffer[BUFFERSIZE]={};
+        readencryptMessage(perClientSocket, (unsigned char*)recvBuffer, curgroup->sym_key);
+        MessageBlock *curMessage=(MessageBlock *)malloc(sizeof(MessageBlock));
+        strcpy(curMessage->message, recvBuffer);
+        strcpy(curMessage->ID, ID);
+        curMessage->next=NULL;
+        pthread_mutex_lock(&curgroup->group_lock);
+        fprintf(stderr, "%s sends message %s\n", curMessage->ID, curMessage->message);
+        curMessage->remaining=curgroup->num_member;
+        if(curgroup->message_list_head==NULL){ // This is the first message in group
+            curgroup->message_list_head=curMessage;
+            curgroup->message_list_tail=curMessage;
+        }
+        else{
+            curgroup->message_list_tail->next=curMessage;
+            curgroup->message_list_tail=curMessage;
+        }
+        pthread_mutex_unlock(&curgroup->group_lock);
+        if(strcmp(recvBuffer, "CLOSEDM")==0){
+            break;
+        }
+    }
+    pthread_mutex_lock(&curgroup->group_lock);
+    curgroup->num_member--;
+    if(curgroup->num_member==0){ // Dismiss group
+        pthread_mutex_unlock(&curgroup->group_lock);
+        pthread_mutex_lock(&grouplist_lock);
+        if(curgroup==grouplist){
+            grouplist=grouplist->next;
+        }
+        else{
+            Group *prev=grouplist, *cur=grouplist->next;
+            while(cur!=NULL){
+                if(cur==curgroup){
+                    prev->next=cur->next;
+                    break;
+                }
+                prev=cur;  cur=cur->next;
+            }
+        }
+        pthread_mutex_unlock(&grouplist_lock);
+        pthread_join(receiver, NULL);
+        fprintf(stderr, MAGENTA("[LOG]")" Group %s has been dismissed\n", curgroup->name);
+        free(curgroup); return;
+    }
+    if(strcmp(curgroup->member_list->ID, ID)==0){
+        curgroup->member_list=curgroup->member_list->next;
+    }
+    else{
+        Member *prev=curgroup->member_list, *cur=curgroup->member_list->next;
+        while(cur!=NULL){
+            if(strcmp(ID, cur->ID)==0){
+                prev->next=cur->next;
+                break;
+            }
+            prev=cur; cur=cur->next;
+        }
+    }
+    pthread_mutex_unlock(&curgroup->group_lock);
+    pthread_join(receiver, NULL);
+    return;
+}
+
+static void *readgroupmessage(void *arg){
+    char *ID; int perClientSocket; Group *curgroup; MessageBlock *message_read;
+    memcpy(&ID, arg, sizeof(char *));
+    memcpy(&perClientSocket, arg+sizeof(char *), sizeof(int));
+    memcpy(&curgroup, arg+sizeof(char *)+sizeof(int), sizeof(Group *));
+    memcpy(&message_read, arg+sizeof(char *)+sizeof(int)+sizeof(Group *), sizeof(MessageBlock *));
+
+    while(true){
+        pthread_mutex_lock(&curgroup->group_lock);
+        while(message_read->next==NULL){
+            pthread_mutex_unlock(&curgroup->group_lock);
+            usleep(100000); //Prevent the thread occupy the lock
+            pthread_mutex_lock(&curgroup->group_lock);
+        }
+        message_read->remaining-=1;
+        if(message_read->remaining==0){
+            MessageBlock *tem=message_read;
+            message_read=message_read->next;
+            curgroup->message_list_head=message_read;
+            free(tem);
+        }
+        else
+            message_read=message_read->next;
+        char sendBuffer[BUFFERSIZE]={};
+        char message[BUFFERSIZE]={};
+        strcpy(sendBuffer, message_read->ID);
+        strcpy(message, message_read->message);
+        pthread_mutex_unlock(&curgroup->group_lock);
+        if(strcmp(ID, sendBuffer)==0 && strcmp(message,"CLOSEDM")==0){
+             message_read->remaining-=1;
+            if(message_read->remaining==0){
+                MessageBlock *tem=message_read;
+                curgroup->message_list_head=message_read;
+                free(tem);
+            }
+            break;
+        }
+        else if( strcmp(ID, sendBuffer)==0 )
+            continue;
+        else if(strcmp(message, "CLOSEDM")==0 || strcmp(message, "JOIN")==0 ){
+            char tem[BUFFERSIZE];
+            strcpy(tem, sendBuffer);
+            strcpy(sendBuffer, "System:");
+            strcat(sendBuffer, tem);
+            if(strcmp(message, "CLOSEDM")==0) strcat(sendBuffer, " leave the group");
+            else strcat(sendBuffer, " join the group");
+        }
+        else{
+            strcat(sendBuffer, ":"); strcat(sendBuffer, message);
+        }
+        sendencryptMessage(perClientSocket, sendBuffer, curgroup->sym_key);
+    }
+    pthread_exit(0);
 }

@@ -46,18 +46,21 @@ char currentUserID[100] = "";
 char currentPeerID[100] = "";
 char lastMessageSentBy[100] = ""; // Who sent the last message? Used for message window drawing
 
+int clientSocket = 0;
 int peerSocket; // Used for DM with a peer
 
 // Used for encryption of DM
 unsigned char my_asym_public_key[KEYBYTES]={0};
 EVP_PKEY *asym_key;
 unsigned char chat_sym_key[KEY_LEN]={0};
+unsigned char group_sym_key[KEY_LEN]={0};
 static unsigned char file_sym_key[KEY_LEN] = {0};
+
 
 int main(int argc, char const* argv[]) {
 //MARK: - Socket Setup
     int listeningPort = setListeningPort(argc, argv); // Get listening port from arguments
-    int listeningSocket = 0, clientSocket = 0;
+    int listeningSocket = 0;
     listeningSocket = setListeningSocket(listeningSocket, listeningPort); // Set listening socket
 
     unsigned char recvBuffer[BUFFERSIZE] = {0}; // buffer for messages from server
@@ -226,6 +229,12 @@ int main(int argc, char const* argv[]) {
                 printf(GREEN("%s\n"), recvBuffer);
                 readencryptMessage(clientSocket, recvBuffer, sym_key);
             }
+            printf(GREEN("END OF USER LIST\n"));
+            printf(GREEN("\nChatroom\n====================\n"));
+            while (strcmp(recvBuffer, "END OF CHATROOM LIST") != 0) {
+                readencryptMessage(clientSocket, recvBuffer, sym_key);
+                printf(GREEN("%s\n"), recvBuffer);
+            }
 
 //MARK: - DM
         } else if (strcmp(token, "chat") == 0) {
@@ -376,11 +385,11 @@ int main(int argc, char const* argv[]) {
                                 sendMessage(fsock, "FILE");
                                 sendMessage(fsock, currentUserID);
                                 sendMessage(fsock, (char*)basename);
-                                
+
                                 fseeko(fp, 0, SEEK_END); off_t fsz = ftello(fp); fseeko(fp, 0, SEEK_SET);
                                 char sizeStr[64]; snprintf(sizeStr, sizeof(sizeStr), "%lld", (long long)fsz);
                                 sendMessage(fsock, sizeStr);
-                                
+
                                 // Wait for receiver acceptance before proceeding
                                 printf(YELLOW("Waiting for peer to accept file transfer...(10s)\n"));
                                 char fileAcceptResp[16] = {0};
@@ -391,7 +400,7 @@ int main(int argc, char const* argv[]) {
                                     shutdown(fsock, SHUT_WR); close(fsock);
                                     continue;
                                 }
-                                
+
                                 // Perform key exchange: send RSA public key and receive encrypted symmetric key
                                 sendMessage(fsock, (char*)my_asym_public_key);
                                 unsigned char encrypt_text[KEYBYTES] = {0};
@@ -514,6 +523,77 @@ int main(int argc, char const* argv[]) {
             }
             fileAcceptSignal = true;
             pthread_cond_signal(&readyToAcceptFile);
+            pthread_mutex_unlock(&mutex);
+
+//MARK: - Create group chatroom
+        } else if(strcmp(token, "create")==0){
+            if(!loggedIn) {
+                printf("You are currently not logged in, plaese login to use this feature.\n");
+                continue;
+            }
+            if (DMOngoing) {
+                printf(RED("Cannot have more than one ongoing chat at once.\n"));
+                continue;
+            }
+            char sendBuffer[BUFFERSIZE] = "";
+            int parameterIndex = parseInput(token, sendBuffer, NULL);
+            if (parameterIndex != 2){
+                printf("Invalid parameters.\nUsage: create <name>\n");
+                continue;
+            }
+            sendencryptMessage(clientSocket, sendBuffer, sym_key);
+            readencryptMessage(clientSocket, recvBuffer, sym_key);
+            if(strncmp(recvBuffer, "Created", 7)==0){
+                printf("This chatroom has been created. Please join it directly\n");
+                continue;
+            }
+
+            pthread_mutex_lock(&mutex);
+            DMOngoing = true;
+            pthread_mutex_unlock(&mutex);
+            if (1 != RAND_bytes(group_sym_key, sizeof(group_sym_key))) handleErrors("RAND_bytes key failed");
+            sendencryptMessage(clientSocket, group_sym_key, sym_key);
+            printf(YELLOW("Entering chatroom...\n"));
+            GroupChat(clientSocket);
+            printf(YELLOW("Leaving chatroom...\n"));
+            currentPeerID[0] = '\0';
+            pthread_mutex_lock(&mutex);
+            DMOngoing = false;
+            pthread_mutex_unlock(&mutex);
+
+//MARK: - Join group chatroom
+        } else if(strcmp(token,"join") == 0){
+            if(!loggedIn) {
+                printf("You are currently not logged in, plaese login to use this feature.\n");
+                continue;
+            }
+            if (DMOngoing) {
+                printf(RED("Cannot have more than one ongoing chat at once.\n"));
+                continue;
+            }
+            char sendBuffer[BUFFERSIZE] = "";
+            int parameterIndex = parseInput(token, sendBuffer, NULL);
+            if (parameterIndex != 2){
+                printf("Invalid parameters.\nUsage: join <name>\n");
+                continue;
+            }
+            sendencryptMessage(clientSocket, sendBuffer, sym_key);
+            readencryptMessage(clientSocket, recvBuffer, sym_key);
+            if(strcmp(recvBuffer, "Not exist")==0){
+                printf("This chatroom hasn't been created. Please create it first\n");
+                continue;
+            }
+            pthread_mutex_lock(&mutex);
+            DMOngoing = true;
+            pthread_mutex_unlock(&mutex);
+            sendencryptMessage(clientSocket, "OK", sym_key);
+            readencryptMessage(clientSocket, group_sym_key, sym_key);
+            printf(YELLOW("Entering chatroom...\n"));
+            GroupChat(clientSocket);
+            printf(YELLOW("Leaving chatroom...\n"));
+            currentPeerID[0] = '\0';
+            pthread_mutex_lock(&mutex);
+            DMOngoing = false;
             pthread_mutex_unlock(&mutex);
 
 //MARK: - Help
@@ -878,6 +958,138 @@ static void oneToOneChat(void) {
     return;
 }
 
+static void GroupChat(int clientSocket){
+    // UI setup
+    initscr();
+    cbreak();
+    noecho();
+    keypad(stdscr, TRUE);
+    start_color(); // Enable color functionality
+    use_default_colors(); // Optional: allow transparency with terminal default background
+
+    init_pair(1, COLOR_RED, -1); // Red text on default background
+    init_pair(2, COLOR_BLUE, -1); // Blue text on default background
+    init_pair(3, COLOR_YELLOW, -1); // Yellow text on default background
+
+    int cols = getmaxx(stdscr);
+    resizeWindows(); // Create windows
+
+    // Create message reciever thread for chat
+    if (pthread_create(&messageReciever, NULL, group_recvMessage, NULL) != 0) {
+        perror(RED("[ERROR]")" Failed to create message reciever thread\n");
+        endwin();
+        exit(EXIT_FAILURE);
+    }
+    // Set up resize handler
+    signal(SIGWINCH, handleWindowResize);
+    int inputCharacter;
+    char timestamp[TIMEWINDOWWIDTH];
+    time_t now = time(NULL) - 60; // -60 to trigger the first message
+    struct tm *t = localtime(&now);
+    strftime(prevTimestamp, sizeof(prevTimestamp), "%a %b %d %H:%M", t);
+
+    // Keep reading user input and send them
+    while (true) {
+        inputCharacter = wgetch(inputWindow);
+        if (inputCharacter == 27) { // ESC key, end chat session
+            break;
+        } else if (peerSocket < 0) { // Peer has left
+            continue;
+        } else if (inputCharacter == '\n') { // Input with \n as ending
+            if (pos > 0) { // User has input something
+                chatInputBuffer[pos] = '\0';
+
+                // Display & send message
+                sendencryptMessage(clientSocket, chatInputBuffer, group_sym_key);
+                pthread_mutex_lock(&drawWindow);
+                // Print sender
+                wattron(messageWindow, COLOR_PAIR(1));
+                if (strcmp(lastMessageSentBy, currentUserID) != 0) { // Last message not sent by current user, print sender
+                    wprintw(messageWindow, "%s:\n", currentUserID);
+                    wprintw(timeWindow, "\n");
+                    strcpy(lastMessageSentBy, currentUserID);
+                    strcpy(messageBuffer[messageCount], currentUserID); // Store ID tag
+                    strcpy(messageBuffer[messageCount] + MAXMSGLEN, "\n"); // Store timestamp
+                    messageBuffer[messageCount][MAXMSGLEN + TIMEWINDOWWIDTH] = 1; // 01 self tag
+                    messageCount++;
+                    messageCount %= MAXMESSAGES;
+                    if (messageCount == oldestMessage) {
+                        oldestMessage++;
+                        oldestMessage %= MAXMESSAGES;
+                    }
+                }
+
+                // Print message
+                wprintw(messageWindow, " > %s\n", chatInputBuffer);
+                wattroff(messageWindow, COLOR_PAIR(1));
+
+                // Print timestamp
+                now = time(NULL);
+                t = localtime(&now);
+                strftime(timestamp, sizeof(timestamp), "%a %b %d %H:%M", t);
+                if (strcmp(prevTimestamp, timestamp) != 0) {
+                    wprintw(timeWindow, " %s\n", timestamp);
+                    strcpy(prevTimestamp, timestamp);
+                    strcpy(messageBuffer[messageCount] + MAXMSGLEN, timestamp);
+                } else {
+                    wprintw(timeWindow, "\n");
+                    strcpy(messageBuffer[messageCount] + MAXMSGLEN, "\n");
+                }
+                for (int i = 0; i < pos / (cols - TIMEWINDOWWIDTH - 3); i++) {
+                    wprintw(timeWindow, "\n");
+                }
+                // Update message history
+                strcpy(messageBuffer[messageCount], chatInputBuffer);
+                messageBuffer[messageCount][MAXMSGLEN + TIMEWINDOWWIDTH] = 0; // 00 self message
+                messageCount++;
+                messageCount %= MAXMESSAGES;
+                if (messageCount == oldestMessage) {
+                    oldestMessage++;
+                    oldestMessage %= MAXMESSAGES;
+                }
+                wrefresh(timeWindow);
+                wrefresh(messageWindow);
+                pthread_mutex_unlock(&drawWindow);
+
+                pos = 0;
+                memset(chatInputBuffer, 0, sizeof(chatInputBuffer));
+            }
+        } else if (inputCharacter == KEY_BACKSPACE || inputCharacter == 127) { // Backspace
+            if (pos > 0) {
+                chatInputBuffer[--pos] = '\0';
+            }
+        } else if (isprint(inputCharacter) && pos < BUFFERSIZE - 1) {
+            chatInputBuffer[pos++] = inputCharacter;
+        }
+
+        // Draw Status bar
+        pthread_mutex_lock(&drawWindow);
+        werase(statusWindow);
+        mvwprintw(statusWindow, 0, 0, " Chatting with %s | Press ESC to leave ", currentPeerID);
+        wrefresh(statusWindow);
+        pthread_mutex_unlock(&drawWindow);
+
+        // Draw input field
+        pthread_mutex_lock(&drawWindow);
+        werase(inputWindow);
+        wattron(inputWindow, COLOR_PAIR(1));
+        mvwprintw(inputWindow, 0, 0, "%s> %s", currentUserID, chatInputBuffer);
+        wattroff(inputWindow, COLOR_PAIR(1));
+        wrefresh(inputWindow);
+        pthread_mutex_unlock(&drawWindow);
+    }
+
+    if (clientSocket > 0) { // Initiate termination from this side
+        sendencryptMessage(clientSocket, "CLOSEDM", group_sym_key);
+    }
+
+    // Cancel the message recieving thread
+    pthread_cancel(messageReciever);
+    pthread_join(messageReciever, NULL);
+    endwin();
+    return;
+}
+
 static void *recvMessage(void *arg) {
     char recvBuffer[BUFFERSIZE] = ""; // buffer for messages from peer
     char timestamp[TIMEWINDOWWIDTH];
@@ -895,6 +1107,92 @@ static void *recvMessage(void *arg) {
             pthread_mutex_lock(&drawWindow);
             wattron(messageWindow, COLOR_PAIR(3));
             wprintw(messageWindow, "Peer left the chat. (Hit ESC to continue)\n");
+            wattroff(messageWindow, COLOR_PAIR(3));
+            wrefresh(messageWindow);
+            wrefresh(inputWindow);
+            pthread_mutex_unlock(&drawWindow);
+            break;
+        } else {
+            pthread_mutex_lock(&drawWindow);
+            // Print sender
+            wattron(messageWindow, COLOR_PAIR(2));
+            if (strcmp(lastMessageSentBy, currentPeerID) != 0) { // Last message not sent by peer, print sender
+                wprintw(messageWindow, "%s:\n", currentPeerID);
+                wprintw(timeWindow, "\n");
+                strcpy(lastMessageSentBy, currentPeerID);
+                strcpy(messageBuffer[messageCount], currentPeerID); // Store ID tag
+                strcpy(messageBuffer[messageCount] + MAXMSGLEN, "\n"); // Store timestamp
+                messageBuffer[messageCount][MAXMSGLEN + TIMEWINDOWWIDTH] = 3; // 11 peer ID tag
+                messageCount++;
+                messageCount %= MAXMESSAGES;
+                if (messageCount == oldestMessage) {
+                    oldestMessage++;
+                    oldestMessage %= MAXMESSAGES;
+                }
+            }
+
+            // Print message
+            wprintw(messageWindow, " > %s\n", recvBuffer);
+            wattroff(messageWindow, COLOR_PAIR(2));
+
+            // Print timestamp
+            now = time(NULL);
+            t = localtime(&now);
+            strftime(timestamp, sizeof(timestamp), "%a %b %d %H:%M", t);
+            if (strcmp(prevTimestamp, timestamp) != 0) {
+                wprintw(timeWindow, " %s\n", timestamp);
+                strcpy(prevTimestamp, timestamp);
+                strcpy(messageBuffer[messageCount] + MAXMSGLEN, timestamp);
+            } else {
+                wprintw(timeWindow, "\n");
+                strcpy(messageBuffer[messageCount] + MAXMSGLEN, "\n");
+            }
+            for (int i = 0; i < strlen(recvBuffer) / (messageWindowWidth - 3); i++) {
+                wprintw(timeWindow, "\n");
+            }
+            // Update message history
+            strcpy(messageBuffer[messageCount], recvBuffer);
+            messageBuffer[messageCount][MAXMSGLEN + TIMEWINDOWWIDTH] = 2; // 10 peer message
+            messageCount++;
+            messageCount %= MAXMESSAGES;
+            if (messageCount == oldestMessage) {
+                oldestMessage++;
+                oldestMessage %= MAXMESSAGES;
+            }
+            wrefresh(timeWindow);
+            wrefresh(messageWindow);
+            wrefresh(inputWindow);
+            pthread_mutex_unlock(&drawWindow);
+        }
+
+        pthread_testcancel();
+    }
+    return NULL;
+}
+
+static void *group_recvMessage(void *arg) {
+    char timestamp[TIMEWINDOWWIDTH];
+    time_t now = time(NULL) - 60; // -60 to trigger the first message
+    struct tm *t = localtime(&now);
+    strftime(prevTimestamp, sizeof(prevTimestamp), "%a %b %d %H:%M", t);
+    int messageWindowWidth = getmaxx(messageWindow);
+    while (true) {
+        char recvBuffer[BUFFERSIZE] = ""; // buffer for messages from peer
+        readencryptMessage(clientSocket, recvBuffer, group_sym_key);
+        char *message=strchr(recvBuffer, ':');
+        if(message==NULL){
+            perror("Message format error\n"); //format: "<user>:<message>"
+            continue;
+        }
+        char tem[BUFFERSIZE];
+        strcpy(tem, recvBuffer);
+        strncpy(currentPeerID, recvBuffer, message-recvBuffer);
+        currentPeerID[message-recvBuffer]='\0';
+        strcpy(recvBuffer, tem+(message-recvBuffer)+1);
+        if (strcmp(recvBuffer, "CLOSEDM") == 0) {
+            pthread_mutex_lock(&drawWindow);
+            wattron(messageWindow, COLOR_PAIR(3));
+            wprintw(messageWindow, "%s left the chat.\n", currentPeerID);
             wattroff(messageWindow, COLOR_PAIR(3));
             wrefresh(messageWindow);
             wrefresh(inputWindow);

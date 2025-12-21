@@ -50,6 +50,29 @@ typedef struct {
     pthread_cond_t cond_nonfull;
 } JobQueue;
 
+typedef struct group{
+    char name[BUFFERSIZE];
+    int num_member;
+    pthread_mutex_t group_lock;
+    unsigned char sym_key[KEYBYTES];
+    struct member *member_list;
+    struct messageblock *message_list_head; // the last message haven't been read
+    struct messageblock *message_list_tail; // contain the newset message
+    struct group *next;
+}Group;
+
+typedef struct member{
+    char ID[BUFFERSIZE];
+    struct member *next;
+}Member;
+
+typedef struct messageblock{
+    char ID[BUFFERSIZE];
+    char message[BUFFERSIZE];
+    int remaining; // Record number of members who haven't receive this.
+    struct messageblock *next;
+}MessageBlock;
+
 static void queue_init(JobQueue *q);
 static void queue_push(JobQueue *q, int sock);
 static int queue_pop(JobQueue *q);
@@ -65,6 +88,8 @@ static void removeFromList(bool mode, User **currentUserPtr);
 static User *checkUserInList(bool mode, char *userID);
 static User *insertUserToList(bool mode, char *userID, char *password, struct sockaddr_in *clientListenAddress, User **loginUser);
 static void *consoleWatcher(void *arg);
+static void sendgroupmessage(char *ID, int perClientSocket, Group *curgroup);
+static void *readgroupmessage(void *arg);
 static void cleanUp(void);
 static void saveUsers(char *fileName);
 static void readUsers(char *fileName);
