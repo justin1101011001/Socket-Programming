@@ -5,7 +5,7 @@ To compile, run ``make`` in the folder where the ``Makefile`` is, this should cr
 To start the server, run ``./server.out`` directly, and use ``exit`` to end execution. A list of registered users can be displayed using ``list``.
 
 To run the client, use ``./client.out <port number>``. The ``<port number>`` should be an integer in the range [49152, 65535].
-There are 8 available actions in the client program:
+There are 12 available actions in the client program:
  1. Registration: Registers a new user with the server. Syntax: ``register <ID> <password>``
  2. Deregistration: Deregisters an existing user from the server. Syntax: ``deregister <ID> <password>``
  3. Login: Logs in to a user that is already registered. Syntax: ``login <ID> <password>``
@@ -13,9 +13,11 @@ There are 8 available actions in the client program:
  5. List Online Users: Lists out the users that are currently online. Syntax: ``list``
  6. Chat with Online User: Send and receive messages with another online user. Syntax: ``chat <Target ID>``
  7. Accept Chat Request: Accept chat request from another user and start a chat session. Syntax: ``accept`` (When prompted)
- 8. Create: Create a group chatroom and enter chatroom directly. Syntax: ``create <group_ID>``
- 9. Join: Enter a group chatroom that has been created. Syntax: ``join <group_ID>``
- 10. Exit Client Program: Ends the client program. Syntax: ``exit``
+ 8. Send file: Send a file at a specific path to an online user. Syntax: ``sendfile <ID> <path/to/file>``
+ 9. Accept file: Accept a file sent from another user. Syntax: ``acceptfile`` (When prompted)
+ 10. Create: Create a group chatroom and enter chatroom directly. Syntax: ``create <group_ID>``
+ 11. Join: Enter a group chatroom that has been created. Syntax: ``join <group_ID>``
+ 12. Exit Client Program: Ends the client program. Syntax: ``exit``
 
 You can also type ``help`` in the client program to view this list. 
 
