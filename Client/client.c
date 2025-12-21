@@ -627,6 +627,7 @@ static void *acceptDM(void *arg) { // Thread function to constantly listen for p
             strncpy(incomingFileName, filename, sizeof(incomingFileName) - 1);
             incomingFileSize = expectedSize;
             struct timespec tsf; clock_gettime(CLOCK_REALTIME, &tsf); tsf.tv_sec += 10;
+            bool acceptFile = true;
             while (!fileAcceptSignal) {
                 int retf = pthread_cond_timedwait(&readyToAcceptFile, &mutex, &tsf);
                 if (retf == ETIMEDOUT) {
@@ -638,6 +639,7 @@ static void *acceptDM(void *arg) { // Thread function to constantly listen for p
 //                    fileAcceptSignal = false;
 //                    pthread_mutex_unlock(&mutex);
                     // continue outer accept loop
+                    acceptFile = false;
                     break;
                 }
             }
@@ -645,6 +647,9 @@ static void *acceptDM(void *arg) { // Thread function to constantly listen for p
             filePendingRequest = false;
             pthread_mutex_unlock(&mutex);
 
+            if (!acceptFile) {
+                continue;
+            }
             // Inform sender that we accept and are ready to exchange keys
             sendMessage(fileSock, "FILE_OK");
 
