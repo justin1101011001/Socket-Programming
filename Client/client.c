@@ -607,6 +607,8 @@ int main(int argc, char const* argv[]) {
             printf(YELLOW("%-25s")": %-25s\n", "Accept chat request", "accept");
             printf(YELLOW("%-25s")": %-25s\n", "Send file to user", "sendfile <ID> <filepath>");
             printf(YELLOW("%-25s")": %-25s\n", "Accept file request", "acceptfile");
+            printf(YELLOW("%-25s")": %-25s\n", "Create new chat group", "create <group_ID>");
+            printf(YELLOW("%-25s")": %-25s\n", "Join chat group", "join <group_ID>");
             printf(YELLOW("%-25s")": %-25s\n", "Exit Client Program", "exit");
         } else {
             printf("Unknown command, type \"help\" for usage.\n");
