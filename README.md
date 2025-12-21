@@ -13,7 +13,9 @@ There are 8 available actions in the client program:
  5. List Online Users: Lists out the users that are currently online. Syntax: ``list``
  6. Chat with Online User: Send and receive messages with another online user. Syntax: ``chat <Target ID>``
  7. Accept Chat Request: Accept chat request from another user and start a chat session. Syntax: ``accept`` (When prompted)
- 8. Exit Client Program: Ends the client program. Syntax: ``exit``
+ 8. Create: Create a group chatroom and enter chatroom directly. Syntax: ``create <group_ID>``
+ 9. Join: Enter a group chatroom that has been created. Syntax: ``join <group_ID>``
+ 10. Exit Client Program: Ends the client program. Syntax: ``exit``
 
 You can also type ``help`` in the client program to view this list. 
 
